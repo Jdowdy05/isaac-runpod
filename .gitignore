@@ -1,0 +1,50 @@
+# macOS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.python-version
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Project data and training artifacts
+/data/raw/
+/data/processed/
+/checkpoints/
+/logs/
+/outputs/
+/runs/
+/wandb/
+/tensorboard/
+
+# Local environment files
+.env
+.env.*
+
+# Isaac / Omniverse caches and generated content
+*.kitlog
+*.usd.cache
+*.usda.cache
+*.usdc.cache
+
+# Jupyter
+.ipynb_checkpoints/

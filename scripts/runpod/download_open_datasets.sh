@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+RAW_ROOT="${RAW_ROOT:-${PROJECT_ROOT}/data/raw}"
+PROCESSED_ROOT="${PROCESSED_ROOT:-${PROJECT_ROOT}/data/processed/open}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+DOWNLOAD_AIST="${DOWNLOAD_AIST:-1}"
+DOWNLOAD_RETARGETED_AMASS="${DOWNLOAD_RETARGETED_AMASS:-0}"
+
+AIST_ROOT="${RAW_ROOT}/aistplusplus"
+AIST_RELEASE_ROOT="https://github.com/google/aistplusplus_dataset/releases/download/v1.0"
+
+mkdir -p "${RAW_ROOT}" "${PROCESSED_ROOT}"
+
+download_file() {
+  local url="$1"
+  local output_path="$2"
+  if [[ -f "${output_path}" ]]; then
+    echo "Already downloaded: ${output_path}"
+    return
+  fi
+  curl -L --fail --retry 3 "${url}" -o "${output_path}"
+}
+
+if [[ "${DOWNLOAD_AIST}" == "1" ]]; then
+  mkdir -p "${AIST_ROOT}"
+  download_file "${AIST_RELEASE_ROOT}/motions.zip" "${AIST_ROOT}/motions.zip"
+  download_file "${AIST_RELEASE_ROOT}/keypoints3d.zip" "${AIST_ROOT}/keypoints3d.zip"
+  download_file "${AIST_RELEASE_ROOT}/cameras.zip" "${AIST_ROOT}/cameras.zip"
+
+  unzip -qo "${AIST_ROOT}/motions.zip" -d "${AIST_ROOT}"
+  unzip -qo "${AIST_ROOT}/keypoints3d.zip" -d "${AIST_ROOT}"
+  unzip -qo "${AIST_ROOT}/cameras.zip" -d "${AIST_ROOT}"
+
+  "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/data/prepare_aist_sparse.py" \
+    --aist-root "${AIST_ROOT}" \
+    --output "${PROCESSED_ROOT}/aist_sparse_pose.npz"
+fi
+
+if [[ "${DOWNLOAD_RETARGETED_AMASS}" == "1" ]]; then
+  hf download \
+    --repo-type dataset \
+    ember-lab-berkeley/AMASS_Retargeted_for_G1 \
+    --local-dir "${RAW_ROOT}/hf/AMASS_Retargeted_for_G1"
+fi
+
+echo
+echo "Open dataset setup complete."
+if [[ -f "${PROCESSED_ROOT}/aist_sparse_pose.npz" ]]; then
+  echo "Sparse teleop dataset: ${PROCESSED_ROOT}/aist_sparse_pose.npz"
+  echo "To use it:"
+  echo "  export OP3_TELEOP_MODE=dataset"
+  echo "  export OP3_TELEOP_DATASET_PATH=${PROCESSED_ROOT}/aist_sparse_pose.npz"
+fi
+if [[ "${DOWNLOAD_RETARGETED_AMASS}" == "1" ]]; then
+  echo "Retargeted motion prior: ${RAW_ROOT}/hf/AMASS_Retargeted_for_G1"
+fi

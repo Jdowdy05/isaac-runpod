@@ -1,0 +1,15 @@
+[package]
+version = "0.1.0"
+title = "OP3 Teleop Lab"
+description = "External Isaac Lab project for OP3 sparse-pose teleoperation locomotion."
+category = "Simulation"
+keywords = ["isaaclab", "teleoperation", "humanoid", "robotis", "op3"]
+readme = "docs/README.md"
+changelog = "docs/CHANGELOG.md"
+
+[dependencies]
+"omni.isaac.core" = {}
+
+[[python.module]]
+name = "op3_teleop_lab"
+
