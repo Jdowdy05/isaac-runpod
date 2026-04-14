@@ -3,10 +3,10 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/workspace}"
-ISAACLAB_ROOT="${ISAACLAB_ROOT:-${WORKSPACE_ROOT}/IsaacLab}"
+source "${PROJECT_ROOT}/scripts/runpod/common.sh"
+ISAACLAB_ROOT="$(resolve_isaaclab_root)"
 ISAACLAB_REF="${ISAACLAB_REF:-main}"
 INSTALL_MODE="${INSTALL_MODE:-newton}"
-source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 
 echo "Project root: ${PROJECT_ROOT}"
 echo "Isaac Lab root: ${ISAACLAB_ROOT}"
@@ -31,10 +31,6 @@ else
   git -C "${ISAACLAB_ROOT}" checkout "${ISAACLAB_REF}"
 fi
 
-resolve_python_cmd "${ISAACLAB_ROOT}"
-"${PYTHON_CMD[@]}" -m pip install --upgrade pip setuptools wheel
-"${PYTHON_CMD[@]}" -m pip install --upgrade numpy pyyaml "huggingface_hub[cli]"
-
 if [[ "${IS_PREBUILT_DOCKER}" == "1" ]]; then
   :
 elif [[ "${INSTALL_MODE}" == "newton" ]]; then
@@ -54,6 +50,9 @@ else
   exit 1
 fi
 
+resolve_python_cmd "${ISAACLAB_ROOT}"
+"${PYTHON_CMD[@]}" -m pip install --upgrade pip setuptools wheel
+"${PYTHON_CMD[@]}" -m pip install --upgrade numpy pyyaml "huggingface_hub[cli]"
 "${PYTHON_CMD[@]}" -m pip install -e "${PROJECT_ROOT}/source/op3_teleop_lab"
 
 echo

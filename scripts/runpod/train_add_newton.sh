@@ -2,9 +2,9 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-ISAACLAB_ROOT="${ISAACLAB_ROOT:-/workspace/IsaacLab}"
 DATASET_PATH="${OP3_TELEOP_DATASET_PATH:-${PROJECT_ROOT}/data/processed/open/aist_sparse_pose.npz}"
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
+ISAACLAB_ROOT="$(resolve_isaaclab_root)"
 
 if [[ -n "${OP3_TELEOP_MODE:-}" ]]; then
   TELEOP_MODE="${OP3_TELEOP_MODE}"

@@ -4,10 +4,10 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RAW_ROOT="${RAW_ROOT:-${PROJECT_ROOT}/data/raw}"
 PROCESSED_ROOT="${PROCESSED_ROOT:-${PROJECT_ROOT}/data/processed/open}"
-ISAACLAB_ROOT="${ISAACLAB_ROOT:-/workspace/IsaacLab}"
 DOWNLOAD_AIST="${DOWNLOAD_AIST:-1}"
 DOWNLOAD_RETARGETED_AMASS="${DOWNLOAD_RETARGETED_AMASS:-0}"
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
+ISAACLAB_ROOT="$(resolve_isaaclab_root)"
 
 AIST_ROOT="${RAW_ROOT}/aistplusplus"
 AIST_RELEASE_ROOT="https://github.com/google/aistplusplus_dataset/releases/download/v1.0"

@@ -1,5 +1,24 @@
 #!/usr/bin/env bash
 
+resolve_isaaclab_root() {
+  if [[ -n "${ISAACLAB_ROOT:-}" ]]; then
+    printf '%s\n' "${ISAACLAB_ROOT}"
+    return 0
+  fi
+
+  if [[ -d "/workspace/isaaclab" ]]; then
+    printf '%s\n' "/workspace/isaaclab"
+    return 0
+  fi
+
+  if [[ -d "/workspace/IsaacLab" ]]; then
+    printf '%s\n' "/workspace/IsaacLab"
+    return 0
+  fi
+
+  printf '%s\n' "/workspace/isaaclab"
+}
+
 resolve_python_cmd() {
   local isaaclab_root="${1:-}"
 

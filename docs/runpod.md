@@ -13,7 +13,7 @@
 
 ## Useful Environment Variables
 
-- `ISAACLAB_ROOT`: path to the Isaac Lab checkout.
+- `ISAACLAB_ROOT`: path to the Isaac Lab checkout. If unset, the scripts prefer `/workspace/isaaclab`, then `/workspace/IsaacLab`.
 - `ISAACLAB_REF`: branch, tag, or commit to use.
 - `INSTALL_MODE`: `newton` or `physx`.
 - `ISAACSIM_PATH`: required for the PhysX path if you have an Isaac Sim binary install.
