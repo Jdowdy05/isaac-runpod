@@ -254,7 +254,9 @@ class OP3TeleopEnv(DirectRLEnv):
 
     def _reset_idx(self, env_ids: torch.Tensor | None) -> None:
         if env_ids is None or len(env_ids) == self.num_envs:
-            env_ids = self.robot._ALL_INDICES
+            env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        else:
+            env_ids = self._as_torch(env_ids).to(device=self.device, dtype=torch.long)
 
         self.robot.reset(env_ids)
         super()._reset_idx(env_ids)
