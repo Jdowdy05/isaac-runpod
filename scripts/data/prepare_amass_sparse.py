@@ -363,8 +363,15 @@ def build_model_cache(model_root: Path, model_ext: str, device: torch.device):
         ) from exc
 
     cache: dict[str, object] = {}
-
-    model_base = model_root / "smplh" if (model_root / "smplh").is_dir() else model_root
+    model_base = model_root
+    if any(model_root.glob("SMPLH_*.pkl")) or any(model_root.glob("SMPLH_*.npz")):
+        if model_root.name.lower() == "smplh":
+            model_base = model_root.parent
+    elif not (model_root / "smplh").is_dir():
+        raise FileNotFoundError(
+            "Could not locate a compatible SMPL-H model directory layout for smplx. "
+            f"Checked {model_root} and {model_root / 'smplh'}."
+        )
 
     def get_model(gender: str):
         if gender not in cache:
