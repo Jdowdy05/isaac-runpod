@@ -82,6 +82,7 @@ SEGMENTS = (
     "right_foot",
 )
 SEGMENT_INDEX = {name: idx for idx, name in enumerate(SEGMENTS)}
+OP3_TARGET_BODY_SCALE_M = 0.51
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,6 +124,24 @@ def forward_fill(points: np.ndarray) -> np.ndarray:
         if not valid[idx]:
             output[idx] = output[idx - 1]
     return output
+
+
+def estimate_body_scale(
+    pelvis: np.ndarray,
+    head: np.ndarray,
+    left_foot: np.ndarray,
+    right_foot: np.ndarray,
+) -> float:
+    valid = finite_mask(pelvis) & finite_mask(head) & finite_mask(left_foot) & finite_mask(right_foot)
+    if not np.any(valid):
+        return 1.0
+
+    torso = np.linalg.norm(head[valid] - pelvis[valid], axis=-1)
+    left_leg = np.linalg.norm(left_foot[valid] - pelvis[valid], axis=-1)
+    right_leg = np.linalg.norm(right_foot[valid] - pelvis[valid], axis=-1)
+    body_scale = torso + 0.5 * (left_leg + right_leg)
+    scale = float(np.quantile(body_scale.astype(np.float32), 0.9))
+    return max(scale, 1.0e-3)
 
 
 def normalize_vectors(vectors: np.ndarray, eps: float = 1.0e-6) -> tuple[np.ndarray, np.ndarray]:
@@ -209,6 +228,8 @@ def build_sparse_sequence_from_joints(joints: np.ndarray, effective_fps: float) 
     right_ankle = joints[:, SMPLH_BODY_JOINTS["right_ankle"]]
     left_foot = joints[:, SMPLH_BODY_JOINTS["left_foot"]]
     right_foot = joints[:, SMPLH_BODY_JOINTS["right_foot"]]
+    body_scale = estimate_body_scale(pelvis, head, left_ankle, right_ankle)
+    op3_scale = np.float32(OP3_TARGET_BODY_SCALE_M / body_scale)
 
     raw_targets = {
         "pelvis": pelvis,
@@ -228,8 +249,9 @@ def build_sparse_sequence_from_joints(joints: np.ndarray, effective_fps: float) 
         position_valid[:, seg_idx] = finite_mask(points)
 
     positions[:, SEGMENT_INDEX["pelvis"]] = 0.0
+    positions *= op3_scale
     target_lin_vel_xy = np.diff(pelvis_filled[:, :2], axis=0, prepend=pelvis_filled[:1, :2]) * effective_fps
-    target_lin_vel_xy = target_lin_vel_xy.astype(np.float32)
+    target_lin_vel_xy = target_lin_vel_xy.astype(np.float32) * op3_scale
 
     pelvis_lateral = (left_hip - right_hip) + (left_shoulder - right_shoulder)
     pelvis_up_hint = 0.5 * (left_shoulder + right_shoulder) - pelvis
