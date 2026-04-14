@@ -54,13 +54,13 @@ class OP3TeleopEnv(DirectRLEnv):
         super().__init__(cfg, render_mode=render_mode, **kwargs)
 
         self._joint_ids, _ = self.robot.find_joints(list(self.cfg.profile.joint_names))
+        self._joint_ids = [int(joint_id) for joint_id in self._joint_ids]
         self._body_ids = self._resolve_body_ids()
         self._root_body_id = self._body_ids["pelvis"]
 
-        self._joint_lower = self.robot.data.soft_joint_pos_limits[0, self._joint_ids, 0]
-        self._joint_upper = self.robot.data.soft_joint_pos_limits[0, self._joint_ids, 1]
-        self._default_joint_pos = self.robot.data.default_joint_pos[:, self._joint_ids].clone()
-        self._default_joint_vel = self.robot.data.default_joint_vel[:, self._joint_ids].clone()
+        self._joint_lower, self._joint_upper = self._gather_joint_limits()
+        self._default_joint_pos = self._select_joint_columns(self.robot.data.default_joint_pos).clone()
+        self._default_joint_vel = self._select_joint_columns(self.robot.data.default_joint_vel).clone()
 
         self.actions = torch.zeros(self.num_envs, len(self._joint_ids), dtype=torch.float32, device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
@@ -99,6 +99,29 @@ class OP3TeleopEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.8, 0.8, 0.8))
         light_cfg.func("/World/Light", light_cfg)
 
+    @staticmethod
+    def _scalar_to_float(value) -> float:
+        if hasattr(value, "item"):
+            return float(value.item())
+        return float(value)
+
+    def _gather_joint_limits(self) -> tuple[torch.Tensor, torch.Tensor]:
+        limits = self.robot.data.soft_joint_pos_limits
+        lower = torch.tensor(
+            [self._scalar_to_float(limits[0, joint_id, 0]) for joint_id in self._joint_ids],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        upper = torch.tensor(
+            [self._scalar_to_float(limits[0, joint_id, 1]) for joint_id in self._joint_ids],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        return lower, upper
+
+    def _select_joint_columns(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.stack([tensor[..., joint_id] for joint_id in self._joint_ids], dim=-1)
+
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.prev_actions.copy_(self.actions)
         self.actions = actions.clone()
@@ -111,8 +134,8 @@ class OP3TeleopEnv(DirectRLEnv):
     def _get_observations(self) -> dict[str, torch.Tensor]:
         self.teleop_command = self.command_generator.step()
 
-        joint_pos = self.robot.data.joint_pos[:, self._joint_ids]
-        joint_vel = self.robot.data.joint_vel[:, self._joint_ids]
+        joint_pos = self._select_joint_columns(self.robot.data.joint_pos)
+        joint_vel = self._select_joint_columns(self.robot.data.joint_vel)
         root_ang_vel = self.robot.data.root_ang_vel_b
         projected_gravity = self.robot.data.projected_gravity_b
         joint_pos_scaled = self._scale_joint_pos(joint_pos)
@@ -182,10 +205,12 @@ class OP3TeleopEnv(DirectRLEnv):
         upright_reward = torch.clamp((-self.robot.data.projected_gravity_b[:, 2]), min=0.0, max=1.0)
 
         action_rate_penalty = torch.sum((self.actions - self.prev_actions).square(), dim=-1)
-        energy_penalty = torch.sum((self.actions * self.robot.data.joint_vel[:, self._joint_ids]).square(), dim=-1)
+        joint_pos = self._select_joint_columns(self.robot.data.joint_pos)
+        joint_vel = self._select_joint_columns(self.robot.data.joint_vel)
+        energy_penalty = torch.sum((self.actions * joint_vel).square(), dim=-1)
         joint_limit_penalty = torch.sum(
-            (self.robot.data.joint_pos[:, self._joint_ids] <= self._joint_lower + 1.0e-3)
-            | (self.robot.data.joint_pos[:, self._joint_ids] >= self._joint_upper - 1.0e-3),
+            (joint_pos <= self._joint_lower + 1.0e-3)
+            | (joint_pos >= self._joint_upper - 1.0e-3),
             dim=-1,
         ).float()
 
