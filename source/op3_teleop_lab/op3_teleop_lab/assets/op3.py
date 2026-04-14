@@ -1,3 +1,5 @@
+import importlib
+import os
 from pathlib import Path
 
 import isaaclab.sim as sim_utils
@@ -9,6 +11,36 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 #"C:/Users/VR2/Desktop/mjcf_op3/new_op3/new_op3/scene/scene.usd"
 
 _OP3_USD_PATH = str(Path(__file__).resolve().parent / "op3_asset" / "new_op3.usd")
+
+
+def resolve_op3_cfg() -> ArticulationCfg:
+    """Return the active OP3 articulation config.
+
+    If ``OP3_CFG_IMPORT`` is set, it must point to a config object using either
+    ``package.module:ATTR`` or ``package.module.ATTR`` syntax.
+    """
+
+    import_target = os.environ.get("OP3_CFG_IMPORT")
+    if not import_target:
+        return OP3_CFG
+
+    module_name: str
+    attr_name: str
+    if ":" in import_target:
+        module_name, attr_name = import_target.split(":", 1)
+    else:
+        module_name, _, attr_name = import_target.rpartition(".")
+
+    if not module_name or not attr_name:
+        raise ValueError(
+            "OP3_CFG_IMPORT must use 'package.module:ATTR' or 'package.module.ATTR' syntax."
+        )
+
+    module = importlib.import_module(module_name)
+    cfg = getattr(module, attr_name)
+    if not isinstance(cfg, ArticulationCfg):
+        raise TypeError(f"Imported OP3 config '{import_target}' is not an ArticulationCfg: {type(cfg)!r}")
+    return cfg
 
 OP3_ACTUATOR_CFG = ActuatorNetMLPCfg(
     joint_names_expr=[".*hip.*", ".*knee.*", ".*ank.*"],
