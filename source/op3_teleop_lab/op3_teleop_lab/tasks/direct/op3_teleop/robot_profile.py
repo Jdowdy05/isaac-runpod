@@ -5,12 +5,15 @@ from dataclasses import dataclass, field
 from .constants import TRACKED_SEGMENTS
 
 
-@dataclass(frozen=True)
+@dataclass
 class OP3RobotProfile:
     """Robot-specific body and joint names.
 
     Update this file after adding the final OP3 asset so the names match your USD
     or imported articulation exactly.
+
+    This is intentionally mutable because Isaac Lab's configclass utilities
+    recurse into nested config objects during initialization.
     """
 
     joint_names: tuple[str, ...] = (
@@ -61,4 +64,3 @@ def make_default_op3_profile() -> OP3RobotProfile:
     profile = OP3RobotProfile()
     profile.validate()
     return profile
-

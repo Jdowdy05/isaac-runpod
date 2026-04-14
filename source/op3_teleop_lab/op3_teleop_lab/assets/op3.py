@@ -11,6 +11,10 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 #"C:/Users/VR2/Desktop/mjcf_op3/new_op3/new_op3/scene/scene.usd"
 
 _OP3_USD_PATH = str(Path(__file__).resolve().parent / "op3_asset" / "new_op3.usd")
+# Note: the active OP3_CFG below does not set a live root `rot=...`.
+# The repeated `#rot=(...)` lines farther down are only commented examples.
+# If you ever enable one under Isaac Lab 3.0 migration rules, convert it from
+# old (w, x, y, z) to new (x, y, z, w) first.
 
 
 def resolve_op3_cfg() -> ArticulationCfg:
