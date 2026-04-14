@@ -59,14 +59,15 @@ class OP3TeleopEnv(DirectRLEnv):
         self.teleop_command: SparsePoseBatch | None = None
         super().__init__(cfg, render_mode=render_mode, **kwargs)
 
-        self._joint_ids, joint_names = self.robot.find_joints(list(self.cfg.profile.joint_names))
-        resolved_joint_names = tuple(str(name) for name in joint_names)
-        if resolved_joint_names != tuple(self.cfg.profile.joint_names):
+        joint_ids, joint_names = self.robot.find_joints(list(self.cfg.profile.joint_names))
+        resolved_joint_map = {str(name): int(joint_id) for joint_id, name in zip(joint_ids, joint_names, strict=True)}
+        missing_joint_names = [name for name in self.cfg.profile.joint_names if name not in resolved_joint_map]
+        if missing_joint_names:
             raise ValueError(
-                "Resolved OP3 joint order does not match OP3RobotProfile.joint_names. "
-                f"Expected {self.cfg.profile.joint_names}, got {resolved_joint_names}."
+                "Could not resolve all OP3 joints from the final asset. "
+                f"Missing joints: {missing_joint_names}. Resolved joints: {tuple(resolved_joint_map)}"
             )
-        self._joint_ids = [int(joint_id) for joint_id in self._joint_ids]
+        self._joint_ids = [resolved_joint_map[name] for name in self.cfg.profile.joint_names]
         self._joint_ids_tensor = torch.tensor(self._joint_ids, dtype=torch.long, device=self.device)
         self._body_ids = self._resolve_body_ids()
         self._root_body_id = self._body_ids["pelvis"]

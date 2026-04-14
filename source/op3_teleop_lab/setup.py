@@ -12,9 +12,9 @@ setup(
         "torch>=2.2",
         "gymnasium>=0.29",
         "pyyaml>=6.0",
+        "smplx>=0.1.28",
     ],
     package_data={
         "op3_teleop_lab.tasks.direct.op3_teleop.agents": ["*.yaml"],
     },
 )
-

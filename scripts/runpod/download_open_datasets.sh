@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RAW_ROOT="${RAW_ROOT:-${PROJECT_ROOT}/data/raw}"
 PROCESSED_ROOT="${PROCESSED_ROOT:-${PROJECT_ROOT}/data/processed/open}"
+COMBINED_DATASET_PATH="${COMBINED_DATASET_PATH:-${PROCESSED_ROOT}/teleop_sparse_pose.npz}"
 DOWNLOAD_AIST="${DOWNLOAD_AIST:-1}"
 DOWNLOAD_RETARGETED_AMASS="${DOWNLOAD_RETARGETED_AMASS:-0}"
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
@@ -38,6 +39,10 @@ if [[ "${DOWNLOAD_AIST}" == "1" ]]; then
   "${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/prepare_aist_sparse.py" \
     --aist-root "${AIST_ROOT}" \
     --output "${PROCESSED_ROOT}/aist_sparse_pose.npz"
+
+  "${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/merge_sparse_datasets.py" \
+    --inputs "${PROCESSED_ROOT}/aist_sparse_pose.npz" \
+    --output "${COMBINED_DATASET_PATH}"
 fi
 
 if [[ "${DOWNLOAD_RETARGETED_AMASS}" == "1" ]]; then
@@ -49,11 +54,8 @@ fi
 
 echo
 echo "Open dataset setup complete."
-if [[ -f "${PROCESSED_ROOT}/aist_sparse_pose.npz" ]]; then
-  echo "Sparse teleop dataset: ${PROCESSED_ROOT}/aist_sparse_pose.npz"
-  echo "To use it:"
-  echo "  export OP3_TELEOP_MODE=dataset"
-  echo "  export OP3_TELEOP_DATASET_PATH=${PROCESSED_ROOT}/aist_sparse_pose.npz"
+if [[ -f "${COMBINED_DATASET_PATH}" ]]; then
+  echo "Teleop sparse dataset: ${COMBINED_DATASET_PATH}"
 fi
 if [[ "${DOWNLOAD_RETARGETED_AMASS}" == "1" ]]; then
   echo "Retargeted motion prior: ${RAW_ROOT}/hf/AMASS_Retargeted_for_G1"
