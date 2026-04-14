@@ -382,7 +382,6 @@ def build_model_cache(model_root: Path, model_ext: str, device: torch.device):
                 ext=model_ext,
                 use_pca=False,
                 flat_hand_mean=True,
-                num_betas=16,
             ).to(device)
         return cache[gender]
 
@@ -442,8 +441,12 @@ def main() -> None:
             continue
 
         model = get_model(gender)
+        model_num_betas = int(getattr(model, "num_betas", model.shapedirs.shape[-1]))
         joints_batches: list[np.ndarray] = []
-        betas_batch = np.broadcast_to(betas, (min(args.chunk_size, len(root_orient)), len(betas))).copy()
+        clip_betas = betas[:model_num_betas]
+        if clip_betas.shape[0] < model_num_betas:
+            clip_betas = np.pad(clip_betas, (0, model_num_betas - clip_betas.shape[0]))
+        betas_batch = np.broadcast_to(clip_betas, (min(args.chunk_size, len(root_orient)), model_num_betas)).copy()
 
         with torch.no_grad():
             for start in range(0, len(root_orient), args.chunk_size):
