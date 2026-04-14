@@ -26,6 +26,11 @@ read -r -a AMASS_SUBSET_ARRAY <<< "${AMASS_SUBSETS}"
   --subsets "${AMASS_SUBSET_ARRAY[@]}" \
   "$@"
 
+if [[ ! -f "${AMASS_DATASET_PATH}" ]]; then
+  echo "AMASS sparse dataset was not created: ${AMASS_DATASET_PATH}" >&2
+  exit 1
+fi
+
 MERGE_INPUTS=("${AMASS_DATASET_PATH}")
 if [[ -f "${AIST_DATASET_PATH}" ]]; then
   MERGE_INPUTS=("${AIST_DATASET_PATH}" "${AMASS_DATASET_PATH}")

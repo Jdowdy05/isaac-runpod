@@ -343,12 +343,14 @@ def load_motion_arrays(data: np.lib.npyio.NpzFile, target_fps: float) -> tuple[n
 
 
 def resolve_model_ext(model_root: Path) -> str:
-    if any(model_root.rglob("*.pkl")):
+    if any(model_root.glob("SMPLH_*.pkl")) or any((model_root / "smplh").glob("SMPLH_*.pkl")):
         return "pkl"
-    if any(model_root.rglob("*.npz")):
+    if any(model_root.glob("SMPLH_*.npz")) or any((model_root / "smplh").glob("SMPLH_*.npz")):
         return "npz"
     raise FileNotFoundError(
-        f"Could not find SMPL/SMPL-H model files under {model_root}. Download the body models first."
+        "Could not find SMPL-H body model files. "
+        f"Expected files like SMPLH_MALE/FEMALE/NEUTRAL under {model_root} or {model_root / 'smplh'}. "
+        "The AMASS 'SMPL+H G' motion datasets are separate and do not satisfy this requirement."
     )
 
 
@@ -362,10 +364,12 @@ def build_model_cache(model_root: Path, model_ext: str, device: torch.device):
 
     cache: dict[str, object] = {}
 
+    model_base = model_root / "smplh" if (model_root / "smplh").is_dir() else model_root
+
     def get_model(gender: str):
         if gender not in cache:
             cache[gender] = smplx.create(
-                str(model_root),
+                str(model_base),
                 model_type="smplh",
                 gender=gender,
                 ext=model_ext,
