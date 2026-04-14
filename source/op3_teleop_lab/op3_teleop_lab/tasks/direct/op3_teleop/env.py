@@ -107,13 +107,22 @@ class OP3TeleopEnv(DirectRLEnv):
 
     def _gather_joint_limits(self) -> tuple[torch.Tensor, torch.Tensor]:
         limits = self.robot.data.soft_joint_pos_limits
+        limits_shape = tuple(getattr(limits, "shape", ()))
+
+        def get_limit_value(joint_id: int, side: int) -> float:
+            if len(limits_shape) == 3:
+                return self._scalar_to_float(limits[0, joint_id, side])
+            if len(limits_shape) == 2:
+                return self._scalar_to_float(limits[joint_id, side])
+            raise ValueError(f"Unsupported soft_joint_pos_limits shape: {limits_shape}")
+
         lower = torch.tensor(
-            [self._scalar_to_float(limits[0, joint_id, 0]) for joint_id in self._joint_ids],
+            [get_limit_value(joint_id, 0) for joint_id in self._joint_ids],
             dtype=torch.float32,
             device=self.device,
         )
         upper = torch.tensor(
-            [self._scalar_to_float(limits[0, joint_id, 1]) for joint_id in self._joint_ids],
+            [get_limit_value(joint_id, 1) for joint_id in self._joint_ids],
             dtype=torch.float32,
             device=self.device,
         )
