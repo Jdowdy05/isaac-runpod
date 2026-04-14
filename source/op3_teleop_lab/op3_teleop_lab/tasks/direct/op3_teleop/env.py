@@ -5,7 +5,6 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
-from isaaclab.utils.math import quat_apply
 
 from .constants import SEGMENT_INDEX, TRACKED_SEGMENTS
 from .env_cfg import OP3TeleopEnvCfg
@@ -14,19 +13,19 @@ from .teleop_command import SparsePoseBatch, SparsePoseCommandGenerator
 
 def quat_conjugate(quat: torch.Tensor) -> torch.Tensor:
     result = quat.clone()
-    result[..., 1:] *= -1.0
+    result[..., :3] *= -1.0
     return result
 
 
 def quat_mul(q0: torch.Tensor, q1: torch.Tensor) -> torch.Tensor:
-    w0, x0, y0, z0 = q0.unbind(dim=-1)
-    w1, x1, y1, z1 = q1.unbind(dim=-1)
+    x0, y0, z0, w0 = q0.unbind(dim=-1)
+    x1, y1, z1, w1 = q1.unbind(dim=-1)
     return torch.stack(
         (
-            w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
             w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
             w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
             w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
+            w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
         ),
         dim=-1,
     )
@@ -46,6 +45,13 @@ def quaternion_to_tangent_and_normal(quat: torch.Tensor) -> torch.Tensor:
     return torch.cat((tangent, normal), dim=-1)
 
 
+def quat_apply(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
+    quat_xyz = quat[..., :3]
+    quat_w = quat[..., 3:4]
+    t = 2.0 * torch.cross(quat_xyz, vec, dim=-1)
+    return vec + quat_w * t + torch.cross(quat_xyz, t, dim=-1)
+
+
 class OP3TeleopEnv(DirectRLEnv):
     cfg: OP3TeleopEnvCfg
 
@@ -53,7 +59,13 @@ class OP3TeleopEnv(DirectRLEnv):
         self.teleop_command: SparsePoseBatch | None = None
         super().__init__(cfg, render_mode=render_mode, **kwargs)
 
-        self._joint_ids, _ = self.robot.find_joints(list(self.cfg.profile.joint_names))
+        self._joint_ids, joint_names = self.robot.find_joints(list(self.cfg.profile.joint_names))
+        resolved_joint_names = tuple(str(name) for name in joint_names)
+        if resolved_joint_names != tuple(self.cfg.profile.joint_names):
+            raise ValueError(
+                "Resolved OP3 joint order does not match OP3RobotProfile.joint_names. "
+                f"Expected {self.cfg.profile.joint_names}, got {resolved_joint_names}."
+            )
         self._joint_ids = [int(joint_id) for joint_id in self._joint_ids]
         self._joint_ids_tensor = torch.tensor(self._joint_ids, dtype=torch.long, device=self.device)
         self._body_ids = self._resolve_body_ids()
@@ -139,6 +151,12 @@ class OP3TeleopEnv(DirectRLEnv):
         tensor = self._as_torch(tensor)
         return torch.index_select(tensor, dim=-1, index=self._joint_ids_tensor)
 
+    def _get_root_planar_velocity(self) -> torch.Tensor:
+        root_lin_vel = getattr(self.robot.data, "root_lin_vel_w", None)
+        if root_lin_vel is None:
+            root_lin_vel = self.robot.data.root_lin_vel_b
+        return self._as_torch(root_lin_vel)[:, :2]
+
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.prev_actions.copy_(self.actions)
         self.actions = actions.clone()
@@ -214,7 +232,7 @@ class OP3TeleopEnv(DirectRLEnv):
             quat_error = 1.0 - torch.clamp(quat_alignment, 0.0, 1.0)
             pose_rot_reward += rot_valid * torch.exp(-self.cfg.body_orientation_sigma * quat_error.square())
 
-        root_lin_vel_xy = self._as_torch(self.robot.data.root_lin_vel_b)[:, :2]
+        root_lin_vel_xy = self._get_root_planar_velocity()
         cmd_vel_xy = self.teleop_command.target_lin_vel_xy
         locomotion_error = torch.linalg.norm(root_lin_vel_xy - cmd_vel_xy, dim=-1)
         locomotion_reward = torch.exp(-4.0 * locomotion_error.square())
@@ -312,7 +330,7 @@ class OP3TeleopEnv(DirectRLEnv):
             rot_mask = self.teleop_command.rotation_valid[:, seg_idx].unsqueeze(-1).float()
             rot_diffs.append((target_rot - current_rot) * rot_mask)
 
-        vel_diff = self.teleop_command.target_lin_vel_xy - self._as_torch(self.robot.data.root_lin_vel_b)[:, :2]
+        vel_diff = self.teleop_command.target_lin_vel_xy - self._get_root_planar_velocity()
         return torch.cat(
             (
                 torch.cat(pos_diffs, dim=-1),

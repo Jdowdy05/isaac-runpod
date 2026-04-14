@@ -77,6 +77,8 @@ class ADDTrainer:
             diff_dim=diff_dim,
             device=device,
         )
+        self.running_task_returns = torch.zeros(env.num_envs, device=device)
+        self.running_disc_returns = torch.zeros(env.num_envs, device=device)
 
         self.obs, _ = self.env.reset()
         self.obs = self.obs["policy"]
@@ -109,8 +111,6 @@ class ADDTrainer:
         self.rollout_buffer.step = 0
         completed_task_returns = []
         completed_disc_returns = []
-        running_task_returns = torch.zeros(self.env.num_envs, device=self.device)
-        running_disc_returns = torch.zeros(self.env.num_envs, device=self.device)
 
         for _ in range(self.cfg.rollout_steps):
             with torch.no_grad():
@@ -155,12 +155,15 @@ class ADDTrainer:
             gae_lambda=self.cfg.gae_lambda,
         )
 
-        running_task_returns += torch.sum(self.rollout_buffer.task_rewards, dim=0)
-        running_disc_returns += torch.sum(disc_rewards, dim=0)
-        last_done = self.rollout_buffer.dones[-1] > 0
-        if torch.any(last_done):
-            completed_task_returns.extend(running_task_returns[last_done].detach().cpu().tolist())
-            completed_disc_returns.extend(running_disc_returns[last_done].detach().cpu().tolist())
+        for step in range(self.cfg.rollout_steps):
+            self.running_task_returns += self.rollout_buffer.task_rewards[step]
+            self.running_disc_returns += disc_rewards[step]
+            done = self.rollout_buffer.dones[step] > 0
+            if torch.any(done):
+                completed_task_returns.extend(self.running_task_returns[done].detach().cpu().tolist())
+                completed_disc_returns.extend(self.running_disc_returns[done].detach().cpu().tolist())
+                self.running_task_returns[done] = 0.0
+                self.running_disc_returns[done] = 0.0
 
         return {
             "task_reward_mean": float(self.rollout_buffer.task_rewards.mean().item()),

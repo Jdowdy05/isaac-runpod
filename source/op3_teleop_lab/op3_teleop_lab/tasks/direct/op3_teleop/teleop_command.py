@@ -23,10 +23,10 @@ def quat_from_euler_xyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tens
 
     quat = torch.stack(
         (
-            cr * cp * cy + sr * sp * sy,
             sr * cp * cy - cr * sp * sy,
             cr * sp * cy + sr * cp * sy,
             cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy,
         ),
         dim=-1,
     )
@@ -137,7 +137,8 @@ class SparsePoseCommandGenerator:
     def reset(self, env_ids: torch.Tensor) -> None:
         if env_ids.numel() == 0:
             return
-        self.phase[env_ids] = torch.rand(len(env_ids), device=self.device) * (2.0 * torch.pi)
+        if self.dataset is None:
+            self.phase[env_ids] = torch.rand(len(env_ids), device=self.device) * (2.0 * torch.pi)
         if self.dataset is not None:
             if self.dataset["sequence_starts"] is not None:
                 self.sequence_ids[env_ids] = torch.randint(0, self.num_sequences, (len(env_ids),), device=self.device)
@@ -147,7 +148,7 @@ class SparsePoseCommandGenerator:
 
     def step(self) -> SparsePoseBatch:
         if self.dataset is not None:
-            batch = self._dataset_batch()
+            return self._dataset_batch()
         else:
             batch = self._synthetic_batch()
         self.phase = torch.remainder(self.phase + self.dt * 2.5, 2.0 * torch.pi)
@@ -158,8 +159,11 @@ class SparsePoseCommandGenerator:
             seq_starts = self.dataset["sequence_starts"][self.sequence_ids]
             seq_lengths = self.dataset["sequence_lengths"][self.sequence_ids]
             idx = seq_starts + self.sequence_offsets
+            phase = (2.0 * torch.pi) * self.sequence_offsets.float() / torch.clamp(seq_lengths.float() - 1.0, min=1.0)
         else:
             idx = self.frame_idx
+            denom = max(self.max_frame - 1, 1)
+            phase = (2.0 * torch.pi) * self.frame_idx.float() / float(denom)
         positions = self.dataset["positions"][idx]
         orientations = self.dataset["orientations"][idx]
         position_valid = self.dataset["position_valid"][idx]
@@ -179,7 +183,7 @@ class SparsePoseCommandGenerator:
             orientations,
             position_valid,
             rotation_valid,
-            self.phase.clone(),
+            phase,
             target_lin_vel_xy,
         )
 
@@ -215,7 +219,7 @@ class SparsePoseCommandGenerator:
             (0.05 + 0.10 * anti_swing, -0.05, -0.44 + 0.05 * torch.clamp(anti_swing, min=0.0)), dim=-1
         )
 
-        identity = torch.tensor((1.0, 0.0, 0.0, 0.0), device=self.device).repeat(batch, 1)
+        identity = torch.tensor((0.0, 0.0, 0.0, 1.0), device=self.device).repeat(batch, 1)
         orientations[:] = identity.unsqueeze(1)
         orientations[:, SEGMENT_INDEX["pelvis"]] = quat_from_euler_xyz(
             torch.zeros_like(phase), 0.02 * torch.sin(phase), torso_yaw
