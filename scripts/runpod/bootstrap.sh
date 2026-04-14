@@ -6,7 +6,7 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-/workspace}"
 ISAACLAB_ROOT="${ISAACLAB_ROOT:-${WORKSPACE_ROOT}/IsaacLab}"
 ISAACLAB_REF="${ISAACLAB_REF:-main}"
 INSTALL_MODE="${INSTALL_MODE:-newton}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 
 echo "Project root: ${PROJECT_ROOT}"
 echo "Isaac Lab root: ${ISAACLAB_ROOT}"
@@ -31,8 +31,9 @@ else
   git -C "${ISAACLAB_ROOT}" checkout "${ISAACLAB_REF}"
 fi
 
-"${PYTHON_BIN}" -m pip install --upgrade pip setuptools wheel
-"${PYTHON_BIN}" -m pip install --upgrade numpy pyyaml "huggingface_hub[cli]"
+resolve_python_cmd "${ISAACLAB_ROOT}"
+"${PYTHON_CMD[@]}" -m pip install --upgrade pip setuptools wheel
+"${PYTHON_CMD[@]}" -m pip install --upgrade numpy pyyaml "huggingface_hub[cli]"
 
 if [[ "${IS_PREBUILT_DOCKER}" == "1" ]]; then
   :
@@ -53,7 +54,7 @@ else
   exit 1
 fi
 
-"${PYTHON_BIN}" -m pip install -e "${PROJECT_ROOT}/source/op3_teleop_lab"
+"${PYTHON_CMD[@]}" -m pip install -e "${PROJECT_ROOT}/source/op3_teleop_lab"
 
 echo
 echo "Bootstrap complete."

@@ -4,14 +4,16 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RAW_ROOT="${RAW_ROOT:-${PROJECT_ROOT}/data/raw}"
 PROCESSED_ROOT="${PROCESSED_ROOT:-${PROJECT_ROOT}/data/processed/open}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+ISAACLAB_ROOT="${ISAACLAB_ROOT:-/workspace/IsaacLab}"
 DOWNLOAD_AIST="${DOWNLOAD_AIST:-1}"
 DOWNLOAD_RETARGETED_AMASS="${DOWNLOAD_RETARGETED_AMASS:-0}"
+source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 
 AIST_ROOT="${RAW_ROOT}/aistplusplus"
 AIST_RELEASE_ROOT="https://github.com/google/aistplusplus_dataset/releases/download/v1.0"
 
 mkdir -p "${RAW_ROOT}" "${PROCESSED_ROOT}"
+resolve_python_cmd "${ISAACLAB_ROOT}"
 
 download_file() {
   local url="$1"
@@ -33,7 +35,7 @@ if [[ "${DOWNLOAD_AIST}" == "1" ]]; then
   unzip -qo "${AIST_ROOT}/keypoints3d.zip" -d "${AIST_ROOT}"
   unzip -qo "${AIST_ROOT}/cameras.zip" -d "${AIST_ROOT}"
 
-  "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/data/prepare_aist_sparse.py" \
+  "${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/prepare_aist_sparse.py" \
     --aist-root "${AIST_ROOT}" \
     --output "${PROCESSED_ROOT}/aist_sparse_pose.npz"
 fi

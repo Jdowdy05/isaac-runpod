@@ -17,7 +17,7 @@
 - `ISAACLAB_REF`: branch, tag, or commit to use.
 - `INSTALL_MODE`: `newton` or `physx`.
 - `ISAACSIM_PATH`: required for the PhysX path if you have an Isaac Sim binary install.
-- `PYTHON_BIN`: defaults to `python`, which matches the Isaac Lab container's Isaac Sim Python alias.
+- `PYTHON_BIN`: optional explicit Python executable. If omitted, the RunPod scripts will use `ISAACLAB_ROOT/isaaclab.sh -p` when available, then fall back to `python` or `python3`.
 - `OP3_CFG_IMPORT`: import target for your final OP3 asset config.
 - `OP3_TELEOP_MODE`: `synthetic` or `dataset`.
 - `OP3_TELEOP_DATASET_PATH`: path to the processed sparse-pose dataset NPZ.
