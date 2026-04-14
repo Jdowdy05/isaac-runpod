@@ -41,7 +41,7 @@ class OP3RobotProfile:
     segment_to_body_name: dict[str, str] = field(
         default_factory=lambda: {
             "pelvis": "body_link",
-            "head": "head_link",
+            "head": "head_tilt_link",
             "left_hand": "l_el_link",
             "right_hand": "r_el_link",
             "left_knee": "l_knee_link",
