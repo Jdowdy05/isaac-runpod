@@ -53,17 +53,18 @@ def main() -> None:
 
     train_cfg = ADDTrainingConfig.from_yaml(args.config)
     env = gym.make(args.task, cfg=cfg)
+    base_env = env.unwrapped
     obs_dict, extras = env.reset()
     obs = obs_dict["policy"]
     diff = extras.get("add_diff")
     if diff is None:
-        zero_action = torch.zeros((env.num_envs, env.action_space.shape[-1]), device=obs.device)
+        zero_action = torch.zeros((base_env.num_envs, env.action_space.shape[-1]), device=obs.device)
         obs_dict, _, _, _, extras = env.step(zero_action)
         obs = obs_dict["policy"]
         diff = extras["add_diff"]
 
     trainer = ADDTrainer(
-        env=env,
+        env=base_env,
         obs_dim=obs.shape[-1],
         action_dim=env.action_space.shape[-1],
         diff_dim=diff.shape[-1],
@@ -86,4 +87,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
