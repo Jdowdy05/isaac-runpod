@@ -55,6 +55,7 @@ class OP3TeleopEnv(DirectRLEnv):
 
         self._joint_ids, _ = self.robot.find_joints(list(self.cfg.profile.joint_names))
         self._joint_ids = [int(joint_id) for joint_id in self._joint_ids]
+        self._joint_ids_tensor = torch.tensor(self._joint_ids, dtype=torch.long, device=self.device)
         self._body_ids = self._resolve_body_ids()
         self._root_body_id = self._body_ids["pelvis"]
 
@@ -105,31 +106,38 @@ class OP3TeleopEnv(DirectRLEnv):
             return float(value.item())
         return float(value)
 
+    def _as_torch(self, value) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            return value
+
+        try:
+            import warp as wp  # type: ignore
+
+            try:
+                return wp.to_torch(value)
+            except Exception:
+                if hasattr(value, "contiguous"):
+                    return wp.to_torch(value.contiguous())
+                raise
+        except ImportError:
+            pass
+
+        return torch.as_tensor(value, device=self.device)
+
     def _gather_joint_limits(self) -> tuple[torch.Tensor, torch.Tensor]:
-        limits = self.robot.data.soft_joint_pos_limits
-        limits_shape = tuple(getattr(limits, "shape", ()))
+        limits = self._as_torch(self.robot.data.soft_joint_pos_limits)
+        if limits.ndim == 3:
+            limits = limits[0]
+        if limits.ndim != 2 or limits.shape[-1] != 2:
+            raise ValueError(f"Unsupported soft_joint_pos_limits shape: {tuple(limits.shape)}")
 
-        def get_limit_value(joint_id: int, side: int) -> float:
-            if len(limits_shape) == 3:
-                return self._scalar_to_float(limits[0, joint_id, side])
-            if len(limits_shape) == 2:
-                return self._scalar_to_float(limits[joint_id, side])
-            raise ValueError(f"Unsupported soft_joint_pos_limits shape: {limits_shape}")
-
-        lower = torch.tensor(
-            [get_limit_value(joint_id, 0) for joint_id in self._joint_ids],
-            dtype=torch.float32,
-            device=self.device,
-        )
-        upper = torch.tensor(
-            [get_limit_value(joint_id, 1) for joint_id in self._joint_ids],
-            dtype=torch.float32,
-            device=self.device,
-        )
+        lower = torch.index_select(limits[:, 0], dim=0, index=self._joint_ids_tensor)
+        upper = torch.index_select(limits[:, 1], dim=0, index=self._joint_ids_tensor)
         return lower, upper
 
     def _select_joint_columns(self, tensor: torch.Tensor) -> torch.Tensor:
-        return torch.stack([tensor[..., joint_id] for joint_id in self._joint_ids], dim=-1)
+        tensor = self._as_torch(tensor)
+        return torch.index_select(tensor, dim=-1, index=self._joint_ids_tensor)
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.prev_actions.copy_(self.actions)
@@ -145,8 +153,8 @@ class OP3TeleopEnv(DirectRLEnv):
 
         joint_pos = self._select_joint_columns(self.robot.data.joint_pos)
         joint_vel = self._select_joint_columns(self.robot.data.joint_vel)
-        root_ang_vel = self.robot.data.root_ang_vel_b
-        projected_gravity = self.robot.data.projected_gravity_b
+        root_ang_vel = self._as_torch(self.robot.data.root_ang_vel_b)
+        projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
         joint_pos_scaled = self._scale_joint_pos(joint_pos)
         sparse_pose = self.teleop_command.flatten()
         phase_obs = torch.stack((torch.sin(self.teleop_command.phase), torch.cos(self.teleop_command.phase)), dim=-1)
@@ -175,12 +183,12 @@ class OP3TeleopEnv(DirectRLEnv):
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
-        root_pos = self.robot.data.root_pos_w
-        root_quat = quat_normalize(self.robot.data.root_quat_w)
+        root_pos = self._as_torch(self.robot.data.root_pos_w)
+        root_quat = quat_normalize(self._as_torch(self.robot.data.root_quat_w))
         root_quat_inv = quat_conjugate(root_quat)
 
-        body_pos_w = self.robot.data.body_pos_w
-        body_quat_w = quat_normalize(self.robot.data.body_quat_w)
+        body_pos_w = self._as_torch(self.robot.data.body_pos_w)
+        body_quat_w = quat_normalize(self._as_torch(self.robot.data.body_quat_w))
 
         pose_pos_reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         pose_rot_reward = torch.zeros_like(pose_pos_reward)
@@ -206,12 +214,13 @@ class OP3TeleopEnv(DirectRLEnv):
             quat_error = 1.0 - torch.clamp(quat_alignment, 0.0, 1.0)
             pose_rot_reward += rot_valid * torch.exp(-self.cfg.body_orientation_sigma * quat_error.square())
 
-        root_lin_vel_xy = self.robot.data.root_lin_vel_b[:, :2]
+        root_lin_vel_xy = self._as_torch(self.robot.data.root_lin_vel_b)[:, :2]
         cmd_vel_xy = self.teleop_command.target_lin_vel_xy
         locomotion_error = torch.linalg.norm(root_lin_vel_xy - cmd_vel_xy, dim=-1)
         locomotion_reward = torch.exp(-4.0 * locomotion_error.square())
 
-        upright_reward = torch.clamp((-self.robot.data.projected_gravity_b[:, 2]), min=0.0, max=1.0)
+        projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
+        upright_reward = torch.clamp((-projected_gravity[:, 2]), min=0.0, max=1.0)
 
         action_rate_penalty = torch.sum((self.actions - self.prev_actions).square(), dim=-1)
         joint_pos = self._select_joint_columns(self.robot.data.joint_pos)
@@ -235,8 +244,8 @@ class OP3TeleopEnv(DirectRLEnv):
         )
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        root_height = self.robot.data.root_pos_w[:, 2]
-        upright_cos = -self.robot.data.projected_gravity_b[:, 2]
+        root_height = self._as_torch(self.robot.data.root_pos_w)[:, 2]
+        upright_cos = -self._as_torch(self.robot.data.projected_gravity_b)[:, 2]
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         fallen = (root_height < self.cfg.profile.termination_height) | (
             upright_cos < self.cfg.profile.max_root_tilt_cos
@@ -255,7 +264,7 @@ class OP3TeleopEnv(DirectRLEnv):
         joint_pos += 0.05 * torch.randn_like(joint_pos)
         joint_pos = torch.clamp(joint_pos, self._joint_lower, self._joint_upper)
 
-        default_root_state = self.robot.data.default_root_state[env_ids].clone()
+        default_root_state = self._as_torch(self.robot.data.default_root_state)[env_ids].clone()
         default_root_state[:, :3] += self.scene.env_origins[env_ids]
 
         self.robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
@@ -272,11 +281,11 @@ class OP3TeleopEnv(DirectRLEnv):
         return 2.0 * (joint_pos - self._joint_lower) / torch.clamp(self._joint_upper - self._joint_lower, min=1.0e-6) - 1.0
 
     def _compute_add_differential(self) -> torch.Tensor:
-        root_pos = self.robot.data.root_pos_w
-        root_quat = quat_normalize(self.robot.data.root_quat_w)
+        root_pos = self._as_torch(self.robot.data.root_pos_w)
+        root_quat = quat_normalize(self._as_torch(self.robot.data.root_quat_w))
         root_quat_inv = quat_conjugate(root_quat)
-        body_pos_w = self.robot.data.body_pos_w
-        body_quat_w = quat_normalize(self.robot.data.body_quat_w)
+        body_pos_w = self._as_torch(self.robot.data.body_pos_w)
+        body_quat_w = quat_normalize(self._as_torch(self.robot.data.body_quat_w))
 
         pos_diffs = []
         rot_diffs = []
@@ -301,7 +310,7 @@ class OP3TeleopEnv(DirectRLEnv):
             rot_mask = self.teleop_command.rotation_valid[:, seg_idx].unsqueeze(-1).float()
             rot_diffs.append((target_rot - current_rot) * rot_mask)
 
-        vel_diff = self.teleop_command.target_lin_vel_xy - self.robot.data.root_lin_vel_b[:, :2]
+        vel_diff = self.teleop_command.target_lin_vel_xy - self._as_torch(self.robot.data.root_lin_vel_b)[:, :2]
         return torch.cat(
             (
                 torch.cat(pos_diffs, dim=-1),
