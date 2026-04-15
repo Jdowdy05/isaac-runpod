@@ -243,7 +243,7 @@ OP3_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
 
-        pos=(0.0, 0.0, 0.26),
+        pos=(0.0, 0.0, 0.285),
         #rot=(0.9990482, 0, 0.0436194, 0),
         joint_pos={
 
