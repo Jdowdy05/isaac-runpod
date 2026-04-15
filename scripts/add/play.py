@@ -119,31 +119,34 @@ def main() -> None:
 
     base_env = env.unwrapped
     obs_dict, extras = env.reset()
-    obs = obs_dict["policy"]
+    actor_obs = obs_dict["policy"]
+    critic_obs = obs_dict.get("critic", actor_obs)
     diff = extras.get("add_diff")
     if diff is None:
-        zero_action = torch.zeros((base_env.num_envs, env.action_space.shape[-1]), device=obs.device)
+        zero_action = torch.zeros((base_env.num_envs, env.action_space.shape[-1]), device=actor_obs.device)
         obs_dict, _, _, _, extras = env.step(zero_action)
-        obs = obs_dict["policy"]
+        actor_obs = obs_dict["policy"]
+        critic_obs = obs_dict.get("critic", actor_obs)
         diff = extras["add_diff"]
 
     trainer = ADDTrainer(
         env=base_env,
-        obs_dim=obs.shape[-1],
+        obs_dim=actor_obs.shape[-1],
         action_dim=env.action_space.shape[-1],
         diff_dim=diff.shape[-1],
         config=train_cfg,
-        device=obs.device,
+        device=actor_obs.device,
         out_dir=Path(args.checkpoint).resolve().parent,
+        critic_obs_dim=critic_obs.shape[-1],
     )
     trainer.load(args.checkpoint)
 
-    obs = trainer.obs
+    actor_obs = trainer.actor_obs
     with torch.no_grad():
         for _ in range(args.steps):
-            actions = trainer.policy.deterministic(obs)
+            actions = trainer.policy.deterministic(actor_obs)
             obs_dict, _, _, _, _ = env.step(actions)
-            obs = obs_dict["policy"]
+            actor_obs = obs_dict["policy"]
 
     env.close()
     simulation_app.close()

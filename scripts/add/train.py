@@ -65,24 +65,27 @@ def main() -> None:
     env = gym.make(args.task, cfg=cfg)
     base_env = env.unwrapped
     obs_dict, extras = env.reset()
-    obs = obs_dict["policy"]
+    actor_obs = obs_dict["policy"]
+    critic_obs = obs_dict.get("critic", actor_obs)
     diff = extras.get("add_diff")
     if diff is None:
         # first reset can return empty extras before the first env step
         with torch.no_grad():
-            zero_action = torch.zeros((base_env.num_envs, env.action_space.shape[-1]), device=obs.device)
+            zero_action = torch.zeros((base_env.num_envs, env.action_space.shape[-1]), device=actor_obs.device)
             obs_dict, _, _, _, extras = env.step(zero_action)
-            obs = obs_dict["policy"]
+            actor_obs = obs_dict["policy"]
+            critic_obs = obs_dict.get("critic", actor_obs)
             diff = extras["add_diff"]
 
     trainer = ADDTrainer(
         env=base_env,
-        obs_dim=obs.shape[-1],
+        obs_dim=actor_obs.shape[-1],
         action_dim=env.action_space.shape[-1],
         diff_dim=diff.shape[-1],
         config=train_cfg,
-        device=obs.device,
+        device=actor_obs.device,
         out_dir=args.out_dir,
+        critic_obs_dim=critic_obs.shape[-1],
     )
     if args.checkpoint:
         trainer.load(args.checkpoint)

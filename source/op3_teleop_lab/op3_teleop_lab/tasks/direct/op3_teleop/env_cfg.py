@@ -17,6 +17,21 @@ from .robot_profile import make_default_op3_profile
 PHYSICS_DT = 0.002
 POLICY_CONTROL_HZ = 50.0
 POLICY_DECIMATION = int(round(1.0 / (POLICY_CONTROL_HZ * PHYSICS_DT)))
+ACTOR_HISTORY_STEPS = 10
+CONTACT_GROUP_COUNT = 6
+
+
+def compute_actor_frame_dim(action_dim: int) -> int:
+    return 3 + 3 + 3 + action_dim + action_dim + action_dim + SPARSE_POSE_DIM + 2
+
+
+def compute_actor_obs_dim(action_dim: int, history_steps: int) -> int:
+    return compute_actor_frame_dim(action_dim) * history_steps
+
+
+def compute_critic_obs_dim(action_dim: int, history_steps: int) -> int:
+    privileged_dim = 3 + 1 + CONTACT_GROUP_COUNT + CONTACT_GROUP_COUNT + CONTACT_GROUP_COUNT
+    return compute_actor_obs_dim(action_dim, history_steps) + privileged_dim
 
 if POLICY_DECIMATION != 10:
     raise ValueError(
@@ -30,19 +45,37 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     decimation = POLICY_DECIMATION
     episode_length_s = 20.0
     physics_engine = "physx"
+    actor_history_steps = ACTOR_HISTORY_STEPS
 
     action_scale = 0.45
     joint_vel_scale = 0.05
+    root_lin_acc_scale = 0.05
     action_rate_weight = 0.02
     energy_weight = 2.0e-4
     pose_pos_weight = 1.75
     pose_rot_weight = 0.4
     locomotion_weight = 1.1
     upright_weight = 0.8
+    root_height_weight = 0.4
     alive_reward = 0.2
     joint_limit_weight = 1.0e-2
+    foot_slip_weight = 5.0e-2
+    root_acc_weight = 2.0e-3
     pose_tracking_sigma = 12.0
     body_orientation_sigma = 6.0
+    foot_contact_height_threshold = 0.08
+    knee_contact_height_threshold = 0.16
+    hand_contact_height_threshold = 0.16
+    contact_speed_threshold = 0.75
+
+    mass_scale_range = (0.8, 1.2)
+    joint_gain_scale_range = (0.5, 1.5)
+    reset_xy_pos_noise = 0.05
+    reset_z_pos_noise = 0.015
+    reset_yaw_noise = 0.35
+    reset_lin_vel_noise = 0.1
+    reset_ang_vel_noise = 0.2
+    reset_joint_pos_noise = 0.08
 
     teleop_mode = "synthetic"
     teleop_dataset_path: str | None = None
@@ -66,7 +99,8 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     robot = resolve_op3_cfg().replace(prim_path="/World/envs/env_.*/Robot")
 
     action_space = len(profile.joint_names)
-    observation_space = 3 + 3 + action_space + action_space + action_space + SPARSE_POSE_DIM + 2
+    observation_space = compute_actor_obs_dim(action_space, actor_history_steps)
+    critic_observation_space = compute_critic_obs_dim(action_space, actor_history_steps)
     state_space = 0
 
     def __post_init__(self) -> None:
@@ -78,7 +112,8 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
         self.decimation = POLICY_DECIMATION
         self.sim = build_sim_cfg(self.physics_engine, dt=PHYSICS_DT, render_interval=self.decimation)
         self.action_space = len(self.profile.joint_names)
-        self.observation_space = 3 + 3 + self.action_space + self.action_space + self.action_space + SPARSE_POSE_DIM + 2
+        self.observation_space = compute_actor_obs_dim(self.action_space, self.actor_history_steps)
+        self.critic_observation_space = compute_critic_obs_dim(self.action_space, self.actor_history_steps)
         self.state_space = 0
 
 

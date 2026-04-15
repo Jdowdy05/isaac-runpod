@@ -8,14 +8,16 @@ class RolloutBuffer:
         self,
         rollout_steps: int,
         num_envs: int,
-        obs_dim: int,
+        actor_obs_dim: int,
+        critic_obs_dim: int,
         action_dim: int,
         diff_dim: int,
         device: torch.device,
     ) -> None:
         self.rollout_steps = rollout_steps
         self.num_envs = num_envs
-        self.obs = torch.zeros((rollout_steps, num_envs, obs_dim), device=device, dtype=torch.float32)
+        self.actor_obs = torch.zeros((rollout_steps, num_envs, actor_obs_dim), device=device, dtype=torch.float32)
+        self.critic_obs = torch.zeros((rollout_steps, num_envs, critic_obs_dim), device=device, dtype=torch.float32)
         self.actions = torch.zeros((rollout_steps, num_envs, action_dim), device=device, dtype=torch.float32)
         self.log_probs = torch.zeros((rollout_steps, num_envs), device=device, dtype=torch.float32)
         self.values = torch.zeros((rollout_steps, num_envs), device=device, dtype=torch.float32)
@@ -28,7 +30,8 @@ class RolloutBuffer:
 
     def add(
         self,
-        obs: torch.Tensor,
+        actor_obs: torch.Tensor,
+        critic_obs: torch.Tensor,
         actions: torch.Tensor,
         log_probs: torch.Tensor,
         values: torch.Tensor,
@@ -36,7 +39,8 @@ class RolloutBuffer:
         dones: torch.Tensor,
         diffs: torch.Tensor,
     ) -> None:
-        self.obs[self.step] = obs
+        self.actor_obs[self.step] = actor_obs
+        self.critic_obs[self.step] = critic_obs
         self.actions[self.step] = actions
         self.log_probs[self.step] = log_probs
         self.values[self.step] = values
@@ -67,7 +71,8 @@ class RolloutBuffer:
 
     def flattened(self) -> dict[str, torch.Tensor]:
         return {
-            "obs": self.obs.reshape(-1, self.obs.shape[-1]),
+            "actor_obs": self.actor_obs.reshape(-1, self.actor_obs.shape[-1]),
+            "critic_obs": self.critic_obs.reshape(-1, self.critic_obs.shape[-1]),
             "actions": self.actions.reshape(-1, self.actions.shape[-1]),
             "log_probs": self.log_probs.reshape(-1),
             "values": self.values.reshape(-1),

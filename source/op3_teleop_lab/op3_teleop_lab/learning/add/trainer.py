@@ -34,9 +34,11 @@ class ADDTrainer:
         config: ADDTrainingConfig,
         device: torch.device,
         out_dir: str | Path,
+        critic_obs_dim: int | None = None,
     ) -> None:
         self.env = env
-        self.obs_dim = obs_dim
+        self.actor_obs_dim = obs_dim
+        self.critic_obs_dim = critic_obs_dim if critic_obs_dim is not None else obs_dim
         self.action_dim = action_dim
         self.diff_dim = diff_dim
         self.cfg = config
@@ -52,7 +54,7 @@ class ADDTrainer:
             fixed_action_std=config.fixed_action_std,
         ).to(device)
         self.value = ValueNetwork(
-            obs_dim=obs_dim,
+            obs_dim=self.critic_obs_dim,
             hidden_dims=config.critic_hidden_dims,
             activation=config.activation,
         ).to(device)
@@ -72,7 +74,8 @@ class ADDTrainer:
         self.rollout_buffer = RolloutBuffer(
             rollout_steps=config.rollout_steps,
             num_envs=env.num_envs,
-            obs_dim=obs_dim,
+            actor_obs_dim=self.actor_obs_dim,
+            critic_obs_dim=self.critic_obs_dim,
             action_dim=action_dim,
             diff_dim=diff_dim,
             device=device,
@@ -80,8 +83,9 @@ class ADDTrainer:
         self.running_task_returns = torch.zeros(env.num_envs, device=device)
         self.running_disc_returns = torch.zeros(env.num_envs, device=device)
 
-        self.obs, _ = self.env.reset()
-        self.obs = self.obs["policy"]
+        obs_dict, _ = self.env.reset()
+        self.actor_obs = obs_dict["policy"]
+        self.critic_obs = obs_dict.get("critic", self.actor_obs)
         self.iteration = 0
 
     def train(self, num_iterations: int | None = None) -> None:
@@ -114,16 +118,18 @@ class ADDTrainer:
 
         for _ in range(self.cfg.rollout_steps):
             with torch.no_grad():
-                actions, log_probs = self.policy.sample(self.obs)
-                values = self.value(self.obs)
+                actions, log_probs = self.policy.sample(self.actor_obs)
+                values = self.value(self.critic_obs)
 
             next_obs, task_reward, terminated, truncated, extras = self.env.step(actions)
-            next_obs = next_obs["policy"]
+            next_actor_obs = next_obs["policy"]
+            next_critic_obs = next_obs.get("critic", next_actor_obs)
             dones = (terminated | truncated).float()
             diffs = extras["add_diff"]
 
             self.rollout_buffer.add(
-                obs=self.obs,
+                actor_obs=self.actor_obs,
+                critic_obs=self.critic_obs,
                 actions=actions,
                 log_probs=log_probs,
                 values=values,
@@ -132,10 +138,11 @@ class ADDTrainer:
                 diffs=diffs,
             )
 
-            self.obs = next_obs
+            self.actor_obs = next_actor_obs
+            self.critic_obs = next_critic_obs
 
         with torch.no_grad():
-            next_values = self.value(self.obs)
+            next_values = self.value(self.critic_obs)
 
         flat_diffs = self.rollout_buffer.diffs.reshape(-1, self.diff_dim)
         self.diff_normalizer.record(flat_diffs)
@@ -178,7 +185,7 @@ class ADDTrainer:
         advantages = batch["advantages"]
         advantages = (advantages - advantages.mean()) / torch.clamp(advantages.std(), min=1.0e-6)
         batch["advantages"] = advantages
-        num_samples = batch["obs"].shape[0]
+        num_samples = batch["actor_obs"].shape[0]
         minibatch_size = min(self.cfg.minibatch_size, num_samples)
 
         actor_losses = []
@@ -190,19 +197,20 @@ class ADDTrainer:
             permutation = torch.randperm(num_samples, device=self.device)
             for start in range(0, num_samples, minibatch_size):
                 idx = permutation[start : start + minibatch_size]
-                obs = batch["obs"][idx]
+                actor_obs = batch["actor_obs"][idx]
+                critic_obs = batch["critic_obs"][idx]
                 actions = batch["actions"][idx]
                 old_log_probs = batch["log_probs"][idx]
                 adv = batch["advantages"][idx]
                 returns = batch["returns"][idx]
 
-                log_probs, entropy = self.policy.evaluate_actions(obs, actions)
+                log_probs, entropy = self.policy.evaluate_actions(actor_obs, actions)
                 ratio = torch.exp(log_probs - old_log_probs)
                 unclipped = ratio * adv
                 clipped = torch.clamp(ratio, 1.0 - self.cfg.ppo_clip_ratio, 1.0 + self.cfg.ppo_clip_ratio) * adv
                 actor_loss = -torch.min(unclipped, clipped).mean() - self.cfg.entropy_coef * entropy.mean()
 
-                values = self.value(obs)
+                values = self.value(critic_obs)
                 critic_loss = 0.5 * self.cfg.value_loss_coef * (returns - values).square().mean()
 
                 if epoch < self.cfg.actor_epochs:

@@ -117,11 +117,13 @@ def main() -> None:
 
     obs_dict, extras = env.reset()
     actor_obs = obs_dict["policy"]
+    critic_obs = obs_dict.get("critic", actor_obs)
     diff = extras.get("add_diff")
     if diff is None:
         zero_action = torch.zeros((base_env.num_envs, env.action_space.shape[-1]), device=actor_obs.device)
         obs_dict, _, _, _, extras = env.step(zero_action)
         actor_obs = obs_dict["policy"]
+        critic_obs = obs_dict.get("critic", actor_obs)
         diff = extras["add_diff"]
 
     trainer = ADDTrainer(
@@ -132,6 +134,7 @@ def main() -> None:
         config=train_cfg,
         device=actor_obs.device,
         out_dir=Path(args.checkpoint).resolve().parent,
+        critic_obs_dim=critic_obs.shape[-1],
     )
     trainer.load(args.checkpoint)
 
@@ -147,7 +150,7 @@ def main() -> None:
         shutil.rmtree(frames_dir)
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    actor_obs = trainer.obs
+    actor_obs = trainer.actor_obs
     with torch.no_grad():
         for step in range(args.steps):
             root_pos = base_env._as_torch(base_env.robot.data.root_pos_w)[0]

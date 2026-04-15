@@ -26,7 +26,7 @@ disc_logit_reg: 0.01
 disc_replay_capacity: 200000
 disc_replay_samples: 1000
 
-task_reward_weight: 0.0
+task_reward_weight: 0.02
 disc_reward_weight: 1.0
 
 actor_optimizer:
@@ -44,4 +44,3 @@ disc_optimizer:
 
 save_interval: 100
 log_interval: 10
-
