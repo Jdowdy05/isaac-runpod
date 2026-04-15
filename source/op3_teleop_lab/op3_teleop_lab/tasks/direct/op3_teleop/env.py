@@ -393,12 +393,10 @@ class OP3TeleopEnv(DirectRLEnv):
         )
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        root_height = self._as_torch(self.robot.data.root_pos_w)[:, 2]
-        upright_cos = -self._as_torch(self.robot.data.projected_gravity_b)[:, 2]
+        projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
+        tilt_angle = torch.acos(torch.clamp(-projected_gravity[:, 2], -1.0, 1.0)).abs()
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        fallen = (root_height < self.cfg.profile.termination_height) | (
-            upright_cos < self.cfg.profile.max_root_tilt_cos
-        )
+        fallen = tilt_angle > self.cfg.termination_tilt_angle
         return fallen, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None) -> None:

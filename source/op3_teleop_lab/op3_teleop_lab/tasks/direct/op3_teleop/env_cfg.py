@@ -61,6 +61,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     joint_limit_weight = 1.0e-2
     foot_slip_weight = 5.0e-2
     root_acc_weight = 2.0e-3
+    termination_tilt_angle = 1.2
     pose_tracking_sigma = 12.0
     body_orientation_sigma = 6.0
     foot_contact_height_threshold = 0.08
