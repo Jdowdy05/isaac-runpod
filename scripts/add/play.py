@@ -66,6 +66,16 @@ def main() -> None:
     from op3_teleop_lab.learning.add.trainer import ADDTrainer
     from op3_teleop_lab.tasks.direct.op3_teleop.env_cfg import OP3TeleopEnvCfg, OP3TeleopNewtonEnvCfg
 
+    if args.teleop_mode is None and args.teleop_dataset_path is None:
+        default_dataset = Path(__file__).resolve().parents[2] / "data/processed/open/teleop_sparse_pose.npz"
+        fallback_dataset = Path(__file__).resolve().parents[2] / "data/processed/open/aist_sparse_pose.npz"
+        if default_dataset.exists():
+            args.teleop_mode = "dataset"
+            args.teleop_dataset_path = str(default_dataset)
+        elif fallback_dataset.exists():
+            args.teleop_mode = "dataset"
+            args.teleop_dataset_path = str(fallback_dataset)
+
     cfg = OP3TeleopNewtonEnvCfg() if "Newton" in args.task else OP3TeleopEnvCfg()
     cfg.scene.num_envs = args.num_envs
     if args.teleop_mode is not None:

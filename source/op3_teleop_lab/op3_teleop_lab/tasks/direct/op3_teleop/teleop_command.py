@@ -199,39 +199,56 @@ class SparsePoseCommandGenerator:
         swing = torch.sin(phase)
         anti_swing = torch.sin(phase + torch.pi)
         torso_yaw = 0.15 * torch.sin(phase * 0.5)
+        zeros = torch.zeros_like(phase)
 
         positions[:, SEGMENT_INDEX["pelvis"]] = torch.tensor((0.0, 0.0, 0.0), device=self.device)
         positions[:, SEGMENT_INDEX["head"]] = torch.stack(
-            (0.02 * torch.sin(phase * 0.3), torch.zeros_like(phase), 0.30 + 0.01 * torch.sin(phase)), dim=-1
+            (0.02 * torch.sin(phase * 0.3), zeros, 0.30 + 0.01 * torch.sin(phase)), dim=-1
         )
         positions[:, SEGMENT_INDEX["left_hand"]] = torch.stack(
-            (0.18 + 0.05 * anti_swing, 0.16, 0.14 + 0.03 * torch.cos(phase)), dim=-1
+            (0.18 + 0.05 * anti_swing, torch.full_like(phase, 0.16), 0.14 + 0.03 * torch.cos(phase)), dim=-1
         )
         positions[:, SEGMENT_INDEX["right_hand"]] = torch.stack(
-            (0.18 + 0.05 * swing, -0.16, 0.14 + 0.03 * torch.cos(phase + torch.pi)), dim=-1
+            (0.18 + 0.05 * swing, torch.full_like(phase, -0.16), 0.14 + 0.03 * torch.cos(phase + torch.pi)), dim=-1
         )
-        positions[:, SEGMENT_INDEX["left_knee"]] = torch.stack((0.02 + 0.05 * swing, 0.05, -0.22), dim=-1)
-        positions[:, SEGMENT_INDEX["right_knee"]] = torch.stack((0.02 + 0.05 * anti_swing, -0.05, -0.22), dim=-1)
+        positions[:, SEGMENT_INDEX["left_knee"]] = torch.stack(
+            (0.02 + 0.05 * swing, torch.full_like(phase, 0.05), torch.full_like(phase, -0.22)),
+            dim=-1,
+        )
+        positions[:, SEGMENT_INDEX["right_knee"]] = torch.stack(
+            (0.02 + 0.05 * anti_swing, torch.full_like(phase, -0.05), torch.full_like(phase, -0.22)),
+            dim=-1,
+        )
         positions[:, SEGMENT_INDEX["left_foot"]] = torch.stack(
-            (0.05 + 0.10 * swing, 0.05, -0.44 + 0.05 * torch.clamp(swing, min=0.0)), dim=-1
+            (
+                0.05 + 0.10 * swing,
+                torch.full_like(phase, 0.05),
+                -0.44 + 0.05 * torch.clamp(swing, min=0.0),
+            ),
+            dim=-1,
         )
         positions[:, SEGMENT_INDEX["right_foot"]] = torch.stack(
-            (0.05 + 0.10 * anti_swing, -0.05, -0.44 + 0.05 * torch.clamp(anti_swing, min=0.0)), dim=-1
+            (
+                0.05 + 0.10 * anti_swing,
+                torch.full_like(phase, -0.05),
+                -0.44 + 0.05 * torch.clamp(anti_swing, min=0.0),
+            ),
+            dim=-1,
         )
 
         identity = torch.tensor((0.0, 0.0, 0.0, 1.0), device=self.device).repeat(batch, 1)
         orientations[:] = identity.unsqueeze(1)
         orientations[:, SEGMENT_INDEX["pelvis"]] = quat_from_euler_xyz(
-            torch.zeros_like(phase), 0.02 * torch.sin(phase), torso_yaw
+            zeros, 0.02 * torch.sin(phase), torso_yaw
         )
         orientations[:, SEGMENT_INDEX["head"]] = quat_from_euler_xyz(
-            torch.zeros_like(phase), 0.08 * torch.sin(phase * 0.5), 0.05 * torch.sin(phase * 0.25)
+            zeros, 0.08 * torch.sin(phase * 0.5), 0.05 * torch.sin(phase * 0.25)
         )
         orientations[:, SEGMENT_INDEX["left_hand"]] = quat_from_euler_xyz(
-            0.25 * anti_swing, torch.zeros_like(phase), 0.15 * anti_swing
+            0.25 * anti_swing, zeros, 0.15 * anti_swing
         )
         orientations[:, SEGMENT_INDEX["right_hand"]] = quat_from_euler_xyz(
-            0.25 * swing, torch.zeros_like(phase), -0.15 * swing
+            0.25 * swing, zeros, -0.15 * swing
         )
 
         target_lin_vel_xy[:, 0] = 0.25 + 0.10 * torch.sin(phase * 0.25)
