@@ -21,6 +21,18 @@ def build_arg_parser():
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=2000)
+    parser.add_argument("--video", action="store_true", help="Record an MP4 clip with gymnasium RecordVideo.")
+    parser.add_argument("--video_length", type=int, default=1000)
+    parser.add_argument("--video_dir", default=None)
+    parser.add_argument("--video_prefix", default="op3_add_playback")
+    parser.add_argument(
+        "--record_viser",
+        default=None,
+        help="Optional path for a .viser recording when using the Viser visualizer backend.",
+    )
+    parser.add_argument("--viser_port", type=int, default=8080)
+    parser.add_argument("--viser_share", action="store_true")
+    parser.add_argument("--viser_max_worlds", type=int, default=None)
     return parser
 
 
@@ -33,6 +45,16 @@ def main() -> None:
 
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
+    enable_viser = (
+        args.record_viser is not None
+        or args.viser_share
+        or args.viser_port != 8080
+        or args.viser_max_worlds is not None
+    )
+    if enable_viser and getattr(args, "headless", False):
+        raise ValueError("Viser playback/recording requires visualizers to be enabled. Omit --headless when using --record_viser.")
+    if args.video and hasattr(args, "enable_cameras"):
+        args.enable_cameras = True
     app_launcher = AppLauncher(args)
     simulation_app = app_launcher.app
 
@@ -51,8 +73,40 @@ def main() -> None:
     if args.teleop_dataset_path is not None:
         cfg.teleop_dataset_path = args.teleop_dataset_path
 
+    if enable_viser:
+        try:
+            from isaaclab_visualizers.viser import ViserVisualizerCfg
+        except ImportError:
+            from isaaclab.visualizers.viser import ViserVisualizerCfg  # type: ignore[no-redef]
+
+        cfg.sim.visualizer_cfgs = [
+            ViserVisualizerCfg(
+                port=args.viser_port,
+                share=args.viser_share,
+                record_to_viser=args.record_viser,
+                max_worlds=args.viser_max_worlds,
+            )
+        ]
+
     train_cfg = ADDTrainingConfig.from_yaml(args.config)
-    env = gym.make(args.task, cfg=cfg)
+    render_mode = "rgb_array" if args.video else None
+    env = gym.make(args.task, cfg=cfg, render_mode=render_mode)
+    if args.video:
+        from gymnasium.wrappers import RecordVideo
+
+        checkpoint_dir = Path(args.checkpoint).resolve().parent
+        video_dir = Path(args.video_dir) if args.video_dir is not None else checkpoint_dir / "videos" / "play"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        env = RecordVideo(
+            env,
+            video_folder=str(video_dir),
+            name_prefix=args.video_prefix,
+            step_trigger=lambda step: step == 0,
+            video_length=min(args.video_length, args.steps),
+            disable_logger=True,
+        )
+        print(f"Recording playback video to: {video_dir}")
+
     base_env = env.unwrapped
     obs_dict, extras = env.reset()
     obs = obs_dict["policy"]
