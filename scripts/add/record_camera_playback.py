@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 
@@ -94,9 +93,6 @@ def main() -> None:
         cfg.teleop_dataset_path = args.teleop_dataset_path
 
     train_cfg = ADDTrainingConfig.from_yaml(args.config)
-    env = gym.make(args.task, cfg=cfg)
-    base_env = env.unwrapped
-
     camera_cfg = CameraCfg(
         prim_path="/World/PlaybackCamera",
         update_period=0,
@@ -111,6 +107,9 @@ def main() -> None:
         ),
     )
     camera = Camera(cfg=camera_cfg)
+
+    env = gym.make(args.task, cfg=cfg)
+    base_env = env.unwrapped
 
     obs_dict, extras = env.reset()
     actor_obs = obs_dict["policy"]
@@ -139,45 +138,47 @@ def main() -> None:
     if ffmpeg is None:
         raise FileNotFoundError("ffmpeg is required to encode the playback video.")
 
-    with tempfile.TemporaryDirectory(prefix="op3_playback_frames_") as tmp_dir:
-        frames_dir = Path(tmp_dir)
-        actor_obs = trainer.obs
+    frames_dir = output_path.with_name(f"{output_path.stem}_frames")
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
 
-        with torch.no_grad():
-            for step in range(args.steps):
-                root_pos = base_env._as_torch(base_env.robot.data.root_pos_w)[0]
-                camera_position = root_pos + torch.tensor(
-                    [args.camera_distance, args.camera_side_offset, args.camera_height_offset],
-                    device=actor_obs.device,
-                )
-                camera_target = root_pos + torch.tensor(
-                    [0.0, 0.0, args.camera_target_height],
-                    device=actor_obs.device,
-                )
-                camera.set_world_poses_from_view(camera_position.unsqueeze(0), camera_target.unsqueeze(0))
+    actor_obs = trainer.obs
+    with torch.no_grad():
+        for step in range(args.steps):
+            root_pos = base_env._as_torch(base_env.robot.data.root_pos_w)[0]
+            camera_position = root_pos + torch.tensor(
+                [args.camera_distance, args.camera_side_offset, args.camera_height_offset],
+                device=actor_obs.device,
+            )
+            camera_target = root_pos + torch.tensor(
+                [0.0, 0.0, args.camera_target_height],
+                device=actor_obs.device,
+            )
+            camera.set_world_poses_from_view(camera_position.unsqueeze(0), camera_target.unsqueeze(0))
 
-                actions = trainer.policy.deterministic(actor_obs)
-                obs_dict, _, _, _, _ = env.step(actions)
-                actor_obs = obs_dict["policy"]
+            actions = trainer.policy.deterministic(actor_obs)
+            obs_dict, _, _, _, _ = env.step(actions)
+            actor_obs = obs_dict["policy"]
 
-                camera.update(dt=base_env.physics_dt)
-                frame = camera.data.output["rgb"][0].detach().cpu().numpy()[..., :3]
-                Image.fromarray(_frame_to_uint8(frame)).save(frames_dir / f"frame_{step:05d}.png")
+            camera.update(dt=base_env.physics_dt)
+            frame = camera.data.output["rgb"][0].detach().cpu().numpy()[..., :3]
+            Image.fromarray(_frame_to_uint8(frame)).save(frames_dir / f"frame_{step:05d}.png")
 
-        ffmpeg_cmd = [
-            ffmpeg,
-            "-y",
-            "-framerate",
-            str(args.fps),
-            "-i",
-            str(frames_dir / "frame_%05d.png"),
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            str(output_path),
-        ]
-        subprocess.run(ffmpeg_cmd, check=True)
+    ffmpeg_cmd = [
+        ffmpeg,
+        "-y",
+        "-framerate",
+        str(args.fps),
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+    subprocess.run(ffmpeg_cmd, check=True)
 
     print(f"Saved camera playback video to: {output_path}")
 
