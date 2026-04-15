@@ -93,6 +93,9 @@ def main() -> None:
         cfg.teleop_dataset_path = args.teleop_dataset_path
 
     train_cfg = ADDTrainingConfig.from_yaml(args.config)
+    env = gym.make(args.task, cfg=cfg)
+    base_env = env.unwrapped
+
     camera_cfg = CameraCfg(
         prim_path="/World/PlaybackCamera",
         update_period=0,
@@ -107,9 +110,6 @@ def main() -> None:
         ),
     )
     camera = Camera(cfg=camera_cfg)
-
-    env = gym.make(args.task, cfg=cfg)
-    base_env = env.unwrapped
     if not camera.is_initialized:
         camera._initialize_impl()
         camera._is_initialized = True
