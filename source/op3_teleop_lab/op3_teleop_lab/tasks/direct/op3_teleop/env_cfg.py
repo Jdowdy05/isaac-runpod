@@ -72,7 +72,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     mass_scale_range = (0.8, 1.2)
     joint_gain_scale_range = (0.5, 1.5)
     reset_xy_pos_noise = 0.05
-    reset_z_pos_noise = 0.015
+    reset_z_pos_noise = 0.005
     reset_yaw_noise = 0.35
     reset_lin_vel_noise = 0.1
     reset_ang_vel_noise = 0.2
@@ -81,7 +81,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     teleop_mode = "synthetic"
     teleop_dataset_path: str | None = None
 
-    scene = InteractiveSceneCfg(num_envs=2048, env_spacing=3.0, replicate_physics=True)
+    scene = InteractiveSceneCfg(num_envs=4096, env_spacing=3.0, replicate_physics=True)
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",

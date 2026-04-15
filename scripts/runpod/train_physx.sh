@@ -6,7 +6,7 @@ DATASET_PATH="${OP3_TELEOP_DATASET_PATH:-${PROJECT_ROOT}/data/processed/open/tel
 if [[ ! -f "${DATASET_PATH}" ]]; then
   DATASET_PATH="${PROJECT_ROOT}/data/processed/open/aist_sparse_pose.npz"
 fi
-NUM_ENVS="${NUM_ENVS:-1024}"
+NUM_ENVS="${NUM_ENVS:-2048}"
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 ISAACLAB_ROOT="$(resolve_isaaclab_root)"
 
