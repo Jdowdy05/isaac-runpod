@@ -591,17 +591,39 @@ def build_model_cache(model_root: Path, model_ext: str, device: torch.device):
             f"Checked {model_root} and {model_root / 'smplh'}."
         )
 
+    available_genders = {
+        path.stem.removeprefix("SMPLH_").lower()
+        for path in model_root.glob(f"SMPLH_*.{model_ext}")
+    }
+    available_genders.update(
+        path.stem.removeprefix("SMPLH_").lower()
+        for path in (model_root / "smplh").glob(f"SMPLH_*.{model_ext}")
+    )
+    if not available_genders:
+        raise FileNotFoundError(
+            f"Could not find any SMPL-H model files with extension .{model_ext} under {model_root}."
+        )
+
+    fallback_gender = (
+        "neutral"
+        if "neutral" in available_genders
+        else "male"
+        if "male" in available_genders
+        else "female"
+    )
+
     def get_model(gender: str):
-        if gender not in cache:
-            cache[gender] = smplx.create(
+        resolved_gender = gender if gender in available_genders else fallback_gender
+        if resolved_gender not in cache:
+            cache[resolved_gender] = smplx.create(
                 str(model_base),
                 model_type="smplh",
-                gender=gender,
+                gender=resolved_gender,
                 ext=model_ext,
                 use_pca=False,
                 flat_hand_mean=True,
             ).to(device)
-        return cache[gender]
+        return cache[resolved_gender]
 
     return get_model
 
