@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +87,25 @@ SEGMENT_INDEX = {name: idx for idx, name in enumerate(SEGMENTS)}
 OP3_TARGET_BODY_SCALE_M = 0.51
 
 
+@dataclass(frozen=True)
+class MotionFilterConfig:
+    clip_frames: int
+    clip_stride_frames: int
+    min_contact_ratio: float
+    max_double_air_ratio: float
+    max_root_speed: float
+    max_root_yaw_rate: float
+    max_root_jerk: float
+    min_pelvis_height: float
+    max_pelvis_height: float
+    max_torso_lean_deg: float
+    max_foot_clearance: float
+    max_hand_reach: float
+    max_feet_separation_xy: float
+    contact_height_threshold: float
+    contact_speed_threshold: float
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert AMASS SMPL+H motion files into sparse teleoperation commands.")
     parser.add_argument("--amass-root", type=Path, required=True)
@@ -95,6 +116,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subsets", nargs="*", default=list(DEFAULT_SUBSETS))
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--chunk-size", type=int, default=256)
+    parser.add_argument(
+        "--disable-feasibility-filter",
+        action="store_true",
+        help="Keep all AMASS sequences after sparse conversion without OP3-specific clip filtering.",
+    )
+    parser.add_argument("--filter-clip-seconds", type=float, default=4.0)
+    parser.add_argument("--filter-stride-seconds", type=float, default=4.0)
+    parser.add_argument("--min-contact-ratio", type=float, default=0.75)
+    parser.add_argument("--max-double-air-ratio", type=float, default=0.08)
+    parser.add_argument("--max-root-speed", type=float, default=0.65)
+    parser.add_argument("--max-root-yaw-rate", type=float, default=2.5)
+    parser.add_argument("--max-root-jerk", type=float, default=35.0)
+    parser.add_argument("--min-pelvis-height", type=float, default=0.17)
+    parser.add_argument("--max-pelvis-height", type=float, default=0.36)
+    parser.add_argument("--max-torso-lean-deg", type=float, default=45.0)
+    parser.add_argument("--max-foot-clearance", type=float, default=0.16)
+    parser.add_argument("--max-hand-reach", type=float, default=0.24)
+    parser.add_argument("--max-feet-separation-xy", type=float, default=0.32)
+    parser.add_argument("--contact-height-threshold", type=float, default=0.025)
+    parser.add_argument("--contact-speed-threshold", type=float, default=0.18)
     return parser.parse_args()
 
 
@@ -142,6 +183,15 @@ def estimate_body_scale(
     body_scale = torso + 0.5 * (left_leg + right_leg)
     scale = float(np.quantile(body_scale.astype(np.float32), 0.9))
     return max(scale, 1.0e-3)
+
+
+def compute_op3_scale_from_joints(joints: np.ndarray) -> np.float32:
+    pelvis = joints[:, SMPLH_BODY_JOINTS["pelvis"]]
+    head = joints[:, SMPLH_BODY_JOINTS["head"]]
+    left_ankle = joints[:, SMPLH_BODY_JOINTS["left_ankle"]]
+    right_ankle = joints[:, SMPLH_BODY_JOINTS["right_ankle"]]
+    body_scale = estimate_body_scale(pelvis, head, left_ankle, right_ankle)
+    return np.float32(OP3_TARGET_BODY_SCALE_M / body_scale)
 
 
 def normalize_vectors(vectors: np.ndarray, eps: float = 1.0e-6) -> tuple[np.ndarray, np.ndarray]:
@@ -203,7 +253,175 @@ def rotation_matrices_to_quats_xyzw(mats: np.ndarray) -> np.ndarray:
     return quats
 
 
-def build_sparse_sequence_from_joints(joints: np.ndarray, effective_fps: float) -> tuple[np.ndarray, ...]:
+def build_filter_config(args: argparse.Namespace, effective_fps: float) -> MotionFilterConfig:
+    clip_frames = max(int(round(args.filter_clip_seconds * effective_fps)), args.min_frames)
+    clip_stride_frames = max(int(round(args.filter_stride_seconds * effective_fps)), 1)
+    return MotionFilterConfig(
+        clip_frames=clip_frames,
+        clip_stride_frames=clip_stride_frames,
+        min_contact_ratio=float(args.min_contact_ratio),
+        max_double_air_ratio=float(args.max_double_air_ratio),
+        max_root_speed=float(args.max_root_speed),
+        max_root_yaw_rate=float(args.max_root_yaw_rate),
+        max_root_jerk=float(args.max_root_jerk),
+        min_pelvis_height=float(args.min_pelvis_height),
+        max_pelvis_height=float(args.max_pelvis_height),
+        max_torso_lean_deg=float(args.max_torso_lean_deg),
+        max_foot_clearance=float(args.max_foot_clearance),
+        max_hand_reach=float(args.max_hand_reach),
+        max_feet_separation_xy=float(args.max_feet_separation_xy),
+        contact_height_threshold=float(args.contact_height_threshold),
+        contact_speed_threshold=float(args.contact_speed_threshold),
+    )
+
+
+def iter_clip_ranges(num_frames: int, clip_frames: int, stride_frames: int, min_frames: int) -> list[tuple[int, int]]:
+    if num_frames < min_frames:
+        return []
+    if num_frames <= clip_frames:
+        return [(0, num_frames)]
+
+    clip_ranges: list[tuple[int, int]] = []
+    start = 0
+    while start + clip_frames <= num_frames:
+        clip_ranges.append((start, start + clip_frames))
+        start += stride_frames
+    if not clip_ranges:
+        return [(0, num_frames)]
+    return clip_ranges
+
+
+def contact_mask_from_foot(
+    foot_positions: np.ndarray,
+    effective_fps: float,
+    ground_height: float,
+    height_threshold: float,
+    speed_threshold: float,
+) -> np.ndarray:
+    foot_speed = np.linalg.norm(
+        np.diff(foot_positions, axis=0, prepend=foot_positions[:1]) * effective_fps,
+        axis=-1,
+    )
+    foot_height = foot_positions[:, 2] - ground_height
+    return (foot_height <= height_threshold) & (foot_speed <= speed_threshold)
+
+
+def filter_motion_clips(
+    joints: np.ndarray,
+    effective_fps: float,
+    op3_scale: np.float32,
+    cfg: MotionFilterConfig,
+) -> tuple[list[tuple[int, int]], Counter[str]]:
+    scaled_joints = joints.astype(np.float32) * float(op3_scale)
+
+    pelvis = scaled_joints[:, SMPLH_BODY_JOINTS["pelvis"]]
+    left_hip = scaled_joints[:, SMPLH_BODY_JOINTS["left_hip"]]
+    right_hip = scaled_joints[:, SMPLH_BODY_JOINTS["right_hip"]]
+    left_shoulder = scaled_joints[:, SMPLH_BODY_JOINTS["left_shoulder"]]
+    right_shoulder = scaled_joints[:, SMPLH_BODY_JOINTS["right_shoulder"]]
+    shoulder_center = 0.5 * (left_shoulder + right_shoulder)
+    left_wrist = scaled_joints[:, SMPLH_BODY_JOINTS["left_wrist"]]
+    right_wrist = scaled_joints[:, SMPLH_BODY_JOINTS["right_wrist"]]
+    left_foot = scaled_joints[:, SMPLH_BODY_JOINTS["left_foot"]]
+    right_foot = scaled_joints[:, SMPLH_BODY_JOINTS["right_foot"]]
+
+    ground_height = float(np.quantile(np.concatenate((left_foot[:, 2], right_foot[:, 2])), 0.05))
+    left_contact = contact_mask_from_foot(
+        left_foot,
+        effective_fps=effective_fps,
+        ground_height=ground_height,
+        height_threshold=cfg.contact_height_threshold,
+        speed_threshold=cfg.contact_speed_threshold,
+    )
+    right_contact = contact_mask_from_foot(
+        right_foot,
+        effective_fps=effective_fps,
+        ground_height=ground_height,
+        height_threshold=cfg.contact_height_threshold,
+        speed_threshold=cfg.contact_speed_threshold,
+    )
+    contact_any = left_contact | right_contact
+    double_air = ~contact_any
+
+    root_vel = np.diff(pelvis[:, :2], axis=0, prepend=pelvis[:1, :2]) * effective_fps
+    root_speed = np.linalg.norm(root_vel, axis=-1)
+    if len(root_vel) >= 2:
+        root_acc = np.diff(root_vel, axis=0, prepend=root_vel[:1]) * effective_fps
+    else:
+        root_acc = np.zeros_like(root_vel)
+    if len(root_acc) >= 2:
+        root_jerk = np.linalg.norm(np.diff(root_acc, axis=0, prepend=root_acc[:1]) * effective_fps, axis=-1)
+    else:
+        root_jerk = np.zeros(len(pelvis), dtype=np.float32)
+
+    pelvis_lateral = (left_hip - right_hip) + (left_shoulder - right_shoulder)
+    pelvis_up_hint = shoulder_center - pelvis
+    pelvis_forward_hint = np.cross(pelvis_lateral, pelvis_up_hint)
+    pelvis_world, _ = make_frame_from_forward_up(pelvis_forward_hint, pelvis_up_hint)
+    pelvis_forward = pelvis_world[:, :, 0]
+    pelvis_heading = np.unwrap(np.arctan2(pelvis_forward[:, 1], pelvis_forward[:, 0]))
+    root_yaw_rate = np.abs(np.diff(pelvis_heading, prepend=pelvis_heading[:1]) * effective_fps)
+
+    torso_up, torso_valid = normalize_vectors(shoulder_center - pelvis)
+    torso_cos = np.clip(torso_up[:, 2], -1.0, 1.0)
+    torso_lean_deg = np.degrees(np.arccos(torso_cos)).astype(np.float32)
+    torso_lean_deg[~torso_valid] = 0.0
+
+    pelvis_height = pelvis[:, 2] - ground_height
+    foot_clearance = np.maximum(left_foot[:, 2], right_foot[:, 2]) - ground_height
+    hand_reach = np.maximum(
+        np.linalg.norm(left_wrist - left_shoulder, axis=-1),
+        np.linalg.norm(right_wrist - right_shoulder, axis=-1),
+    )
+    feet_separation_xy = np.linalg.norm(left_foot[:, :2] - right_foot[:, :2], axis=-1)
+
+    kept_clips: list[tuple[int, int]] = []
+    rejection_counts: Counter[str] = Counter()
+    clip_ranges = iter_clip_ranges(
+        num_frames=len(joints),
+        clip_frames=cfg.clip_frames,
+        stride_frames=cfg.clip_stride_frames,
+        min_frames=min(cfg.clip_frames, len(joints)),
+    )
+    for start, end in clip_ranges:
+        clip = slice(start, end)
+        reasons: list[str] = []
+        if float(np.max(root_speed[clip])) > cfg.max_root_speed:
+            reasons.append("root_speed")
+        if float(np.max(root_yaw_rate[clip])) > cfg.max_root_yaw_rate:
+            reasons.append("root_yaw_rate")
+        if float(np.max(root_jerk[clip])) > cfg.max_root_jerk:
+            reasons.append("root_jerk")
+        if float(np.min(pelvis_height[clip])) < cfg.min_pelvis_height:
+            reasons.append("pelvis_too_low")
+        if float(np.max(pelvis_height[clip])) > cfg.max_pelvis_height:
+            reasons.append("pelvis_too_high")
+        if float(np.max(torso_lean_deg[clip])) > cfg.max_torso_lean_deg:
+            reasons.append("torso_lean")
+        if float(np.max(foot_clearance[clip])) > cfg.max_foot_clearance:
+            reasons.append("foot_clearance")
+        if float(np.max(hand_reach[clip])) > cfg.max_hand_reach:
+            reasons.append("hand_reach")
+        if float(np.max(feet_separation_xy[clip])) > cfg.max_feet_separation_xy:
+            reasons.append("feet_separation")
+        if float(np.mean(contact_any[clip])) < cfg.min_contact_ratio:
+            reasons.append("contact_ratio")
+        if float(np.mean(double_air[clip])) > cfg.max_double_air_ratio:
+            reasons.append("double_air")
+
+        if reasons:
+            rejection_counts.update(reasons)
+            continue
+        kept_clips.append((start, end))
+
+    return kept_clips, rejection_counts
+
+
+def build_sparse_sequence_from_joints(
+    joints: np.ndarray,
+    effective_fps: float,
+    op3_scale: np.float32 | None = None,
+) -> tuple[np.ndarray, ...]:
     num_frames = joints.shape[0]
     positions = np.zeros((num_frames, len(SEGMENTS), 3), dtype=np.float32)
     orientations = np.zeros((num_frames, len(SEGMENTS), 4), dtype=np.float32)
@@ -228,8 +446,8 @@ def build_sparse_sequence_from_joints(joints: np.ndarray, effective_fps: float) 
     right_ankle = joints[:, SMPLH_BODY_JOINTS["right_ankle"]]
     left_foot = joints[:, SMPLH_BODY_JOINTS["left_foot"]]
     right_foot = joints[:, SMPLH_BODY_JOINTS["right_foot"]]
-    body_scale = estimate_body_scale(pelvis, head, left_ankle, right_ankle)
-    op3_scale = np.float32(OP3_TARGET_BODY_SCALE_M / body_scale)
+    if op3_scale is None:
+        op3_scale = compute_op3_scale_from_joints(joints)
 
     raw_targets = {
         "pelvis": pelvis,
@@ -418,6 +636,9 @@ def main() -> None:
     sequence_lengths: list[int] = []
     sources: list[str] = []
     total_frames = 0
+    rejected_clips = 0
+    kept_clips = 0
+    rejection_reasons: Counter[str] = Counter()
 
     motion_paths = iter_motion_files(args.amass_root, args.subsets)
     if args.limit is not None:
@@ -463,20 +684,48 @@ def main() -> None:
                 joints_batches.append(joints.cpu().numpy().astype(np.float32))
 
         joints_np = np.concatenate(joints_batches, axis=0)
+        op3_scale = compute_op3_scale_from_joints(joints_np)
+        valid_clip_ranges = [(0, len(joints_np))]
+        if not args.disable_feasibility_filter:
+            filter_cfg = build_filter_config(args, effective_fps)
+            valid_clip_ranges, local_rejections = filter_motion_clips(
+                joints_np,
+                effective_fps=effective_fps,
+                op3_scale=op3_scale,
+                cfg=filter_cfg,
+            )
+            rejection_reasons.update(local_rejections)
+            total_candidate_clips = len(
+                iter_clip_ranges(
+                    num_frames=len(joints_np),
+                    clip_frames=filter_cfg.clip_frames,
+                    stride_frames=filter_cfg.clip_stride_frames,
+                    min_frames=min(filter_cfg.clip_frames, len(joints_np)),
+                )
+            )
+            rejected_clips += total_candidate_clips - len(valid_clip_ranges)
+
+        if not valid_clip_ranges:
+            continue
+
         positions, orientations, position_valid, rotation_valid, target_lin_vel_xy = build_sparse_sequence_from_joints(
             joints_np,
             effective_fps=effective_fps,
+            op3_scale=op3_scale,
         )
 
-        position_blocks.append(positions)
-        orientation_blocks.append(orientations)
-        position_valid_blocks.append(position_valid)
-        rotation_valid_blocks.append(rotation_valid)
-        velocity_blocks.append(target_lin_vel_xy)
-        sequence_starts.append(total_frames)
-        sequence_lengths.append(len(positions))
-        sources.append(str(motion_path))
-        total_frames += len(positions)
+        for clip_start, clip_end in valid_clip_ranges:
+            clip = slice(clip_start, clip_end)
+            position_blocks.append(positions[clip])
+            orientation_blocks.append(orientations[clip])
+            position_valid_blocks.append(position_valid[clip])
+            rotation_valid_blocks.append(rotation_valid[clip])
+            velocity_blocks.append(target_lin_vel_xy[clip])
+            sequence_starts.append(total_frames)
+            sequence_lengths.append(clip_end - clip_start)
+            sources.append(f"{motion_path}#{clip_start}:{clip_end}")
+            total_frames += clip_end - clip_start
+            kept_clips += 1
 
     if not position_blocks:
         raise RuntimeError("No usable AMASS motion files were converted into sparse teleop commands.")
@@ -498,6 +747,13 @@ def main() -> None:
     print(f"Wrote AMASS sparse dataset to: {args.output}")
     print(f"Sequences: {len(sequence_lengths)}")
     print(f"Frames: {total_frames}")
+    if not args.disable_feasibility_filter:
+        print(f"Kept clips: {kept_clips}")
+        print(f"Rejected clips: {rejected_clips}")
+        if rejection_reasons:
+            print("Top rejection reasons:")
+            for reason, count in rejection_reasons.most_common():
+                print(f"  - {reason}: {count}")
 
 
 if __name__ == "__main__":
