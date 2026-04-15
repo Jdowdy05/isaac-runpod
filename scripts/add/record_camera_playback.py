@@ -110,6 +110,10 @@ def main() -> None:
 
     env = gym.make(args.task, cfg=cfg)
     base_env = env.unwrapped
+    if not camera.is_initialized:
+        camera._initialize_impl()
+        camera._is_initialized = True
+    camera.reset()
 
     obs_dict, extras = env.reset()
     actor_obs = obs_dict["policy"]
