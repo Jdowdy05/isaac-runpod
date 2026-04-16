@@ -463,16 +463,18 @@ class OP3TeleopEnv(DirectRLEnv):
         if not self._mass_randomization_enabled or self._default_link_masses is None:
             return
 
+        mass_device = self._default_link_masses.device
+        env_ids_for_masses = env_ids.to(device=mass_device, dtype=torch.long)
         min_scale, max_scale = self.cfg.mass_scale_range
         mass_scale = min_scale + (max_scale - min_scale) * torch.rand(
             (len(env_ids), self._default_link_masses.shape[-1]),
             dtype=torch.float32,
-            device=self.device,
+            device=mass_device,
         )
         masses = self._default_link_masses.clone()
-        masses[env_ids] = self._default_link_masses[env_ids] * mass_scale
+        masses[env_ids_for_masses] = self._default_link_masses[env_ids_for_masses] * mass_scale
         try:
-            self._mass_view.set_masses(masses, indices=env_ids)
+            self._mass_view.set_masses(masses, indices=env_ids_for_masses)
         except Exception:
             try:
                 self._mass_view.set_masses(masses.cpu(), indices=env_ids.cpu())
