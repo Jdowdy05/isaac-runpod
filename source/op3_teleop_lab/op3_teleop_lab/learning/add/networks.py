@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import torch
@@ -39,23 +40,26 @@ def resolve_activation(name: str) -> type[nn.Module]:
     raise ValueError(f"Unsupported activation: {name}")
 
 
-class GaussianPolicy(nn.Module):
+class DeterministicTeacherPolicy(nn.Module):
     def __init__(
         self,
         obs_dim: int,
         act_dim: int,
         hidden_dims: Sequence[int],
         activation: str,
-        fixed_action_std: float,
+        exploration_std: float,
     ) -> None:
         super().__init__()
         act = resolve_activation(activation)
         self.mean_net = build_mlp(obs_dim, hidden_dims, act_dim, act, output_scale=0.01)
-        self.register_buffer("std", torch.full((act_dim,), fixed_action_std))
+        self.register_buffer("exploration_std", torch.full((act_dim,), exploration_std))
+
+    def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.mean_net(obs)
 
     def distribution(self, obs: torch.Tensor) -> Normal:
-        mean = self.mean_net(obs)
-        std = self.std.unsqueeze(0).expand_as(mean)
+        mean = self.deterministic(obs)
+        std = self.exploration_std.unsqueeze(0).expand_as(mean)
         return Normal(mean, std)
 
     def sample(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -64,14 +68,51 @@ class GaussianPolicy(nn.Module):
         log_prob = dist.log_prob(action).sum(dim=-1)
         return action, log_prob
 
-    def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.mean_net(obs)
-
     def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
         log_prob = dist.log_prob(actions).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
         return log_prob, entropy
+
+
+class TemporalStudentPolicy(nn.Module):
+    def __init__(
+        self,
+        obs_dim: int,
+        act_dim: int,
+        history_steps: int,
+        rnn_hidden_dim: int,
+        hidden_dims: Sequence[int],
+        activation: str,
+    ) -> None:
+        super().__init__()
+        if obs_dim % history_steps != 0:
+            raise ValueError(
+                f"TemporalStudentPolicy expected obs_dim divisible by history_steps, got {obs_dim} and {history_steps}."
+            )
+
+        act = resolve_activation(activation)
+        self.history_steps = history_steps
+        self.frame_dim = obs_dim // history_steps
+        self.gru = nn.GRU(
+            input_size=self.frame_dim,
+            hidden_size=rnn_hidden_dim,
+            num_layers=1,
+            batch_first=True,
+        )
+        self.head = build_mlp(rnn_hidden_dim, hidden_dims, act_dim, act, output_scale=0.01)
+
+    def _encode(self, obs: torch.Tensor) -> torch.Tensor:
+        seq = obs.view(-1, self.history_steps, self.frame_dim)
+        _, hidden = self.gru(seq)
+        return hidden[-1]
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        features = self._encode(obs)
+        return self.head(features)
+
+    def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.forward(obs)
 
 
 class ValueNetwork(nn.Module):
@@ -97,4 +138,3 @@ class DifferentialDiscriminator(nn.Module):
         last_layer = self.backbone[-1]
         assert isinstance(last_layer, nn.Linear)
         return last_layer.weight.view(-1)
-

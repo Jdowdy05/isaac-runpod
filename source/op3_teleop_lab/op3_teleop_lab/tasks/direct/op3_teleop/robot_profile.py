@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 
 from .constants import TRACKED_SEGMENTS
 
+HEAD_JOINT_NAMES = ("head_pan", "head_tilt")
+
 
 @dataclass
 class OP3RobotProfile:
@@ -64,3 +66,7 @@ def make_default_op3_profile() -> OP3RobotProfile:
     profile = OP3RobotProfile()
     profile.validate()
     return profile
+
+
+def get_action_joint_names(profile: OP3RobotProfile) -> tuple[str, ...]:
+    return tuple(name for name in profile.joint_names if name not in HEAD_JOINT_NAMES)

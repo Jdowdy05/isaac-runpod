@@ -8,6 +8,7 @@ from isaaclab.envs import DirectRLEnv
 
 from .constants import SEGMENT_INDEX, SPARSE_POSE_DIM, TRACKED_SEGMENTS
 from .env_cfg import OP3TeleopEnvCfg
+from .robot_profile import get_action_joint_names
 from .teleop_command import SparsePoseBatch, SparsePoseCommandGenerator, quat_from_euler_xyz
 
 
@@ -67,14 +68,21 @@ class OP3TeleopEnv(DirectRLEnv):
                 "Could not resolve all OP3 joints from the final asset. "
                 f"Missing joints: {missing_joint_names}. Resolved joints: {tuple(resolved_joint_map)}"
             )
-        self._joint_ids = [resolved_joint_map[name] for name in self.cfg.profile.joint_names]
+        self._joint_names = list(get_action_joint_names(self.cfg.profile))
+        self.action_joint_names = tuple(self._joint_names)
+        self._fixed_joint_names = [name for name in self.cfg.profile.joint_names if name not in self._joint_names]
+        self._joint_ids = [resolved_joint_map[name] for name in self._joint_names]
         self._joint_ids_tensor = torch.tensor(self._joint_ids, dtype=torch.long, device=self.device)
+        self._fixed_joint_ids = [resolved_joint_map[name] for name in self._fixed_joint_names]
+        self._fixed_joint_ids_tensor = torch.tensor(self._fixed_joint_ids, dtype=torch.long, device=self.device)
         self._body_ids = self._resolve_body_ids()
         self._root_body_id = self._body_ids["pelvis"]
 
         self._joint_lower, self._joint_upper = self._gather_joint_limits()
         self._default_joint_pos = self._select_joint_columns(self.robot.data.default_joint_pos).clone()
         self._default_joint_vel = self._select_joint_columns(self.robot.data.default_joint_vel).clone()
+        self._default_fixed_joint_pos = self._select_fixed_joint_columns(self.robot.data.default_joint_pos).clone()
+        self._default_fixed_joint_vel = self._select_fixed_joint_columns(self.robot.data.default_joint_vel).clone()
         self._default_joint_stiffness = self._maybe_select_joint_columns("default_joint_stiffness")
         self._default_joint_damping = self._maybe_select_joint_columns("default_joint_damping")
         self._default_root_state = self._resolve_default_root_state()
@@ -114,10 +122,19 @@ class OP3TeleopEnv(DirectRLEnv):
             except Exception:
                 self._default_link_masses = None
                 self._mass_randomization_enabled = False
+        self._torque_curriculum_step = 0
+        self._last_torque_scale: float | None = None
+        self._nominal_joint_effort_limits_sim, self._runtime_actuator_effort_limits = self._capture_effort_limit_state()
+        self._torque_curriculum_enabled = (
+            self.cfg.physics_engine.lower() == "physx"
+            and self._nominal_joint_effort_limits_sim is not None
+            and hasattr(self.robot, "write_joint_effort_limit_to_sim")
+        )
 
         self.actions = torch.zeros(self.num_envs, len(self._joint_ids), dtype=torch.float32, device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
         self.position_targets = self._default_joint_pos.clone()
+        self.fixed_position_targets = self._default_fixed_joint_pos.clone()
         self._actor_frame_dim = 3 + 3 + 3 + len(self._joint_ids) + len(self._joint_ids) + len(self._joint_ids) + SPARSE_POSE_DIM + 2
         self._actor_history = torch.zeros(
             self.num_envs,
@@ -135,6 +152,8 @@ class OP3TeleopEnv(DirectRLEnv):
             dataset_path=self.cfg.teleop_dataset_path,
         )
         self.teleop_command = self.command_generator.step()
+        if self._torque_curriculum_enabled:
+            self._apply_torque_limit_curriculum(force=True)
 
     def _resolve_body_ids(self) -> dict[str, int]:
         body_ids: dict[str, int] = {}
@@ -199,6 +218,14 @@ class OP3TeleopEnv(DirectRLEnv):
         tensor = self._as_torch(tensor)
         return torch.index_select(tensor, dim=-1, index=self._joint_ids_tensor)
 
+    def _select_fixed_joint_columns(self, tensor: torch.Tensor) -> torch.Tensor:
+        tensor = self._as_torch(tensor)
+        if self._fixed_joint_ids_tensor.numel() == 0:
+            shape = list(tensor.shape)
+            shape[-1] = 0
+            return tensor.new_zeros(shape)
+        return torch.index_select(tensor, dim=-1, index=self._fixed_joint_ids_tensor)
+
     def _maybe_select_joint_columns(self, attr_name: str) -> torch.Tensor | None:
         tensor = getattr(self.robot.data, attr_name, None)
         if tensor is None:
@@ -210,6 +237,95 @@ class OP3TeleopEnv(DirectRLEnv):
         if default_root_state.ndim == 1:
             default_root_state = default_root_state.unsqueeze(0).repeat(self.num_envs, 1)
         return default_root_state.clone()
+
+    def _expand_limit_value(self, value, joint_count: int) -> torch.Tensor | None:
+        if value is None:
+            return None
+        tensor = torch.as_tensor(value, dtype=torch.float32, device=self.device).flatten()
+        if tensor.numel() == 0:
+            return None
+        if tensor.numel() == 1:
+            return tensor.repeat(joint_count)
+        if tensor.numel() != joint_count:
+            raise ValueError(f"Expected {joint_count} effort-limit values, got {tensor.numel()}.")
+        return tensor.clone()
+
+    def _capture_effort_limit_state(self) -> tuple[torch.Tensor | None, dict[str, tuple[torch.Tensor | None, torch.Tensor | None]]]:
+        actuators = getattr(self.robot, "actuators", None)
+        if not isinstance(actuators, dict):
+            return None, {}
+
+        total_joint_count = self._as_torch(self.robot.data.default_joint_pos).shape[-1]
+        solver_limits = torch.zeros(total_joint_count, dtype=torch.float32, device=self.device)
+        solver_mask = torch.zeros(total_joint_count, dtype=torch.bool, device=self.device)
+        runtime_defaults: dict[str, tuple[torch.Tensor | None, torch.Tensor | None]] = {}
+
+        for name, actuator in actuators.items():
+            joint_indices = getattr(actuator, "joint_indices", None)
+            if joint_indices is None:
+                continue
+            joint_indices = torch.as_tensor(joint_indices, dtype=torch.long, device=self.device).flatten()
+            if joint_indices.numel() == 0:
+                continue
+
+            base_effort = self._expand_limit_value(getattr(actuator, "effort_limit", None), joint_indices.numel())
+            base_effort_sim = self._expand_limit_value(getattr(actuator, "effort_limit_sim", None), joint_indices.numel())
+            if base_effort_sim is None and base_effort is not None:
+                base_effort_sim = base_effort.clone()
+
+            runtime_defaults[name] = (
+                base_effort.clone() if base_effort is not None else None,
+                base_effort_sim.clone() if base_effort_sim is not None else None,
+            )
+
+            if base_effort_sim is not None:
+                solver_limits[joint_indices] = base_effort_sim
+                solver_mask[joint_indices] = True
+
+        if not torch.any(solver_mask[self._joint_ids_tensor]):
+            return None, runtime_defaults
+        return solver_limits[self._joint_ids_tensor].clone(), runtime_defaults
+
+    def _current_torque_scale(self) -> float:
+        curriculum_steps = max(int(self.cfg.torque_curriculum_steps), 1)
+        progress = min(float(self._torque_curriculum_step) / float(curriculum_steps), 1.0)
+        return float(
+            self.cfg.torque_curriculum_initial_scale
+            + (self.cfg.torque_curriculum_final_scale - self.cfg.torque_curriculum_initial_scale) * progress
+        )
+
+    def _scale_limit_value(self, value: torch.Tensor | None, scale: float):
+        if value is None:
+            return None
+        scaled = value * scale
+        if scaled.numel() == 1:
+            return float(scaled.item())
+        return scaled.clone()
+
+    def _apply_torque_limit_curriculum(self, force: bool = False) -> None:
+        if not self._torque_curriculum_enabled or self._nominal_joint_effort_limits_sim is None:
+            return
+
+        scale = self._current_torque_scale()
+        if not force and self._last_torque_scale is not None and abs(scale - self._last_torque_scale) < 1.0e-6:
+            return
+
+        effort_limits_sim = (self._nominal_joint_effort_limits_sim * scale).unsqueeze(0).expand(self.num_envs, -1)
+        self.robot.write_joint_effort_limit_to_sim(effort_limits_sim, joint_ids=self._joint_ids)
+
+        actuators = getattr(self.robot, "actuators", None)
+        if isinstance(actuators, dict):
+            for name, actuator in actuators.items():
+                defaults = self._runtime_actuator_effort_limits.get(name)
+                if defaults is None:
+                    continue
+                base_effort, base_effort_sim = defaults
+                if hasattr(actuator, "effort_limit") and base_effort is not None:
+                    actuator.effort_limit = self._scale_limit_value(base_effort, scale)
+                if hasattr(actuator, "effort_limit_sim") and base_effort_sim is not None:
+                    actuator.effort_limit_sim = self._scale_limit_value(base_effort_sim, scale)
+
+        self._last_torque_scale = scale
 
     def _get_root_planar_velocity(self) -> torch.Tensor:
         root_lin_vel = getattr(self.robot.data, "root_lin_vel_w", None)
@@ -296,6 +412,9 @@ class OP3TeleopEnv(DirectRLEnv):
         return torch.cat((actor_obs, privileged), dim=-1)
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
+        if self._torque_curriculum_enabled:
+            self._torque_curriculum_step += 1
+            self._apply_torque_limit_curriculum()
         self.prev_actions.copy_(self.actions)
         self.actions = actions.clone()
         unclipped_targets = self._default_joint_pos + self.cfg.action_scale * self.actions
@@ -303,6 +422,8 @@ class OP3TeleopEnv(DirectRLEnv):
 
     def _apply_action(self) -> None:
         self.robot.set_joint_position_target(self.position_targets, joint_ids=self._joint_ids)
+        if self._fixed_joint_ids:
+            self.robot.set_joint_position_target(self.fixed_position_targets, joint_ids=self._fixed_joint_ids)
 
     def _get_observations(self) -> dict[str, torch.Tensor]:
         self.teleop_command = self.command_generator.step()
@@ -410,6 +531,8 @@ class OP3TeleopEnv(DirectRLEnv):
 
         joint_pos = self._default_joint_pos[env_ids].clone()
         joint_vel = self._default_joint_vel[env_ids].clone()
+        fixed_joint_pos = self._default_fixed_joint_pos[env_ids].clone()
+        fixed_joint_vel = self._default_fixed_joint_vel[env_ids].clone()
         joint_pos += self.cfg.reset_joint_pos_noise * torch.randn_like(joint_pos)
         joint_pos = torch.clamp(joint_pos, self._joint_lower, self._joint_upper)
 
@@ -432,13 +555,23 @@ class OP3TeleopEnv(DirectRLEnv):
         self.robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self.robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, joint_ids=self._joint_ids, env_ids=env_ids)
+        if self._fixed_joint_ids:
+            self.robot.write_joint_state_to_sim(
+                fixed_joint_pos,
+                fixed_joint_vel,
+                joint_ids=self._fixed_joint_ids,
+                env_ids=env_ids,
+            )
         self.robot.set_joint_position_target(joint_pos, joint_ids=self._joint_ids, env_ids=env_ids)
+        if self._fixed_joint_ids:
+            self.robot.set_joint_position_target(fixed_joint_pos, joint_ids=self._fixed_joint_ids, env_ids=env_ids)
         self._randomize_joint_gains(env_ids)
         self._randomize_body_masses(env_ids)
 
         self.actions[env_ids] = 0.0
         self.prev_actions[env_ids] = 0.0
         self.position_targets[env_ids] = joint_pos
+        self.fixed_position_targets[env_ids] = fixed_joint_pos
         self._actor_history[env_ids] = 0.0
         self.command_generator.reset(env_ids)
 

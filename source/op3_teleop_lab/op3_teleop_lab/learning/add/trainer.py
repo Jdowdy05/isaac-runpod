@@ -9,7 +9,12 @@ import torch
 from torch import nn
 
 from .config import ADDTrainingConfig, OptimizerConfig
-from .networks import DifferentialDiscriminator, GaussianPolicy, ValueNetwork
+from .networks import (
+    DeterministicTeacherPolicy,
+    DifferentialDiscriminator,
+    TemporalStudentPolicy,
+    ValueNetwork,
+)
 from .normalizers import DiffNormalizer
 from .replay_buffer import TensorReplayBuffer
 from .rollout_buffer import RolloutBuffer
@@ -46,12 +51,21 @@ class ADDTrainer:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        self.policy = GaussianPolicy(
+        history_steps = int(getattr(self.env.cfg, "actor_history_steps", 1))
+        self.teacher_policy = DeterministicTeacherPolicy(
+            obs_dim=self.critic_obs_dim,
+            act_dim=action_dim,
+            hidden_dims=config.teacher_hidden_dims,
+            activation=config.activation,
+            exploration_std=config.teacher_exploration_std,
+        ).to(device)
+        self.student_policy = TemporalStudentPolicy(
             obs_dim=obs_dim,
             act_dim=action_dim,
-            hidden_dims=config.actor_hidden_dims,
+            history_steps=history_steps,
+            rnn_hidden_dim=config.student_rnn_hidden_dim,
+            hidden_dims=config.student_hidden_dims,
             activation=config.activation,
-            fixed_action_std=config.fixed_action_std,
         ).to(device)
         self.value = ValueNetwork(
             obs_dim=self.critic_obs_dim,
@@ -64,7 +78,8 @@ class ADDTrainer:
             activation=config.activation,
         ).to(device)
 
-        self.actor_optimizer = _make_optimizer(config.actor_optimizer, self.policy.parameters())
+        self.teacher_optimizer = _make_optimizer(config.teacher_optimizer, self.teacher_policy.parameters())
+        self.student_optimizer = _make_optimizer(config.student_optimizer, self.student_policy.parameters())
         self.critic_optimizer = _make_optimizer(config.critic_optimizer, self.value.parameters())
         self.disc_optimizer = _make_optimizer(config.disc_optimizer, self.discriminator.parameters())
 
@@ -88,13 +103,17 @@ class ADDTrainer:
         self.critic_obs = obs_dict.get("critic", self.actor_obs)
         self.iteration = 0
 
+        # Backward-compatibility alias for scripts that still reference trainer.policy.
+        self.policy = self.student_policy
+
     def train(self, num_iterations: int | None = None) -> None:
         max_iterations = num_iterations or self.cfg.max_iterations
         for iteration in range(1, max_iterations + 1):
             self.iteration = iteration
             iter_start = time.time()
             rollout_stats = self.collect_rollout()
-            ppo_stats = self.update_policy()
+            teacher_stats = self.update_teacher()
+            student_stats = self.update_student()
             disc_stats = self.update_discriminator()
             elapsed = time.time() - iter_start
 
@@ -103,7 +122,8 @@ class ADDTrainer:
                     "iteration": iteration,
                     "elapsed_s": round(elapsed, 3),
                     **rollout_stats,
-                    **ppo_stats,
+                    **teacher_stats,
+                    **student_stats,
                     **disc_stats,
                 }
                 print(json.dumps(log_data, sort_keys=True))
@@ -115,17 +135,24 @@ class ADDTrainer:
         self.rollout_buffer.step = 0
         completed_task_returns = []
         completed_disc_returns = []
+        teacher_action_abs_means = []
+        student_action_abs_means = []
 
         for _ in range(self.cfg.rollout_steps):
             with torch.no_grad():
-                actions, log_probs = self.policy.sample(self.actor_obs)
+                teacher_mean_actions = self.teacher_policy.deterministic(self.critic_obs)
+                actions, log_probs = self.teacher_policy.sample(self.critic_obs)
                 values = self.value(self.critic_obs)
+                student_actions = self.student_policy.deterministic(self.actor_obs)
 
             next_obs, task_reward, terminated, truncated, extras = self.env.step(actions)
             next_actor_obs = next_obs["policy"]
             next_critic_obs = next_obs.get("critic", next_actor_obs)
             dones = (terminated | truncated).float()
             diffs = extras["add_diff"]
+
+            teacher_action_abs_means.append(teacher_mean_actions.abs().mean().detach())
+            student_action_abs_means.append(student_actions.abs().mean().detach())
 
             self.rollout_buffer.add(
                 actor_obs=self.actor_obs,
@@ -151,10 +178,7 @@ class ADDTrainer:
         with torch.no_grad():
             disc_rewards = self.compute_disc_rewards(flat_diffs).view(self.cfg.rollout_steps, self.env.num_envs)
 
-        rewards = (
-            self.cfg.task_reward_weight * self.rollout_buffer.task_rewards
-            + self.cfg.disc_reward_weight * disc_rewards
-        )
+        rewards = self.cfg.task_reward_weight * self.rollout_buffer.task_rewards + self.cfg.disc_reward_weight * disc_rewards
         self.rollout_buffer.compute_returns_and_advantages(
             rewards=rewards,
             next_values=next_values,
@@ -178,46 +202,47 @@ class ADDTrainer:
             "total_reward_mean": float(rewards.mean().item()),
             "episode_task_return_mean": float(sum(completed_task_returns) / max(1, len(completed_task_returns))),
             "episode_disc_return_mean": float(sum(completed_disc_returns) / max(1, len(completed_disc_returns))),
+            "teacher_action_abs_mean": float(torch.stack(teacher_action_abs_means).mean().item()),
+            "student_action_abs_mean": float(torch.stack(student_action_abs_means).mean().item()),
         }
 
-    def update_policy(self) -> dict[str, float]:
+    def update_teacher(self) -> dict[str, float]:
         batch = self.rollout_buffer.flattened()
         advantages = batch["advantages"]
         advantages = (advantages - advantages.mean()) / torch.clamp(advantages.std(), min=1.0e-6)
         batch["advantages"] = advantages
-        num_samples = batch["actor_obs"].shape[0]
+        num_samples = batch["critic_obs"].shape[0]
         minibatch_size = min(self.cfg.minibatch_size, num_samples)
 
-        actor_losses = []
+        teacher_losses = []
         critic_losses = []
         entropies = []
 
-        num_epochs = max(self.cfg.actor_epochs, self.cfg.critic_epochs)
+        num_epochs = max(self.cfg.teacher_epochs, self.cfg.critic_epochs)
         for epoch in range(num_epochs):
             permutation = torch.randperm(num_samples, device=self.device)
             for start in range(0, num_samples, minibatch_size):
                 idx = permutation[start : start + minibatch_size]
-                actor_obs = batch["actor_obs"][idx]
                 critic_obs = batch["critic_obs"][idx]
                 actions = batch["actions"][idx]
                 old_log_probs = batch["log_probs"][idx]
                 adv = batch["advantages"][idx]
                 returns = batch["returns"][idx]
 
-                log_probs, entropy = self.policy.evaluate_actions(actor_obs, actions)
+                log_probs, entropy = self.teacher_policy.evaluate_actions(critic_obs, actions)
                 ratio = torch.exp(log_probs - old_log_probs)
                 unclipped = ratio * adv
                 clipped = torch.clamp(ratio, 1.0 - self.cfg.ppo_clip_ratio, 1.0 + self.cfg.ppo_clip_ratio) * adv
-                actor_loss = -torch.min(unclipped, clipped).mean() - self.cfg.entropy_coef * entropy.mean()
+                teacher_loss = -torch.min(unclipped, clipped).mean() - self.cfg.entropy_coef * entropy.mean()
 
                 values = self.value(critic_obs)
                 critic_loss = 0.5 * self.cfg.value_loss_coef * (returns - values).square().mean()
 
-                if epoch < self.cfg.actor_epochs:
-                    self.actor_optimizer.zero_grad(set_to_none=True)
-                    actor_loss.backward()
-                    nn.utils.clip_grad_norm_(self.policy.parameters(), self.cfg.max_grad_norm)
-                    self.actor_optimizer.step()
+                if epoch < self.cfg.teacher_epochs:
+                    self.teacher_optimizer.zero_grad(set_to_none=True)
+                    teacher_loss.backward()
+                    nn.utils.clip_grad_norm_(self.teacher_policy.parameters(), self.cfg.max_grad_norm)
+                    self.teacher_optimizer.step()
 
                 if epoch < self.cfg.critic_epochs:
                     self.critic_optimizer.zero_grad(set_to_none=True)
@@ -225,16 +250,45 @@ class ADDTrainer:
                     nn.utils.clip_grad_norm_(self.value.parameters(), self.cfg.max_grad_norm)
                     self.critic_optimizer.step()
 
-                if epoch < self.cfg.actor_epochs:
-                    actor_losses.append(actor_loss.detach())
+                if epoch < self.cfg.teacher_epochs:
+                    teacher_losses.append(teacher_loss.detach())
                     entropies.append(entropy.mean().detach())
                 if epoch < self.cfg.critic_epochs:
                     critic_losses.append(critic_loss.detach())
 
         return {
-            "actor_loss": float(torch.stack(actor_losses).mean().item()) if actor_losses else 0.0,
+            "teacher_loss": float(torch.stack(teacher_losses).mean().item()) if teacher_losses else 0.0,
             "critic_loss": float(torch.stack(critic_losses).mean().item()) if critic_losses else 0.0,
-            "policy_entropy": float(torch.stack(entropies).mean().item()) if entropies else 0.0,
+            "teacher_entropy": float(torch.stack(entropies).mean().item()) if entropies else 0.0,
+        }
+
+    def update_student(self) -> dict[str, float]:
+        batch = self.rollout_buffer.flattened()
+        num_samples = batch["actor_obs"].shape[0]
+        minibatch_size = min(self.cfg.student_batch_size, num_samples)
+        losses = []
+
+        for _ in range(self.cfg.student_epochs):
+            permutation = torch.randperm(num_samples, device=self.device)
+            for start in range(0, num_samples, minibatch_size):
+                idx = permutation[start : start + minibatch_size]
+                actor_obs = batch["actor_obs"][idx]
+                critic_obs = batch["critic_obs"][idx]
+
+                with torch.no_grad():
+                    teacher_targets = self.teacher_policy.deterministic(critic_obs)
+
+                student_actions = self.student_policy.deterministic(actor_obs)
+                bc_loss = self.cfg.student_bc_weight * (student_actions - teacher_targets).square().mean()
+
+                self.student_optimizer.zero_grad(set_to_none=True)
+                bc_loss.backward()
+                nn.utils.clip_grad_norm_(self.student_policy.parameters(), self.cfg.max_grad_norm)
+                self.student_optimizer.step()
+                losses.append(bc_loss.detach())
+
+        return {
+            "student_bc_loss": float(torch.stack(losses).mean().item()) if losses else 0.0,
         }
 
     def update_discriminator(self) -> dict[str, float]:
@@ -318,14 +372,29 @@ class ADDTrainer:
         rewards = -torch.log(torch.clamp(1.0 - prob, min=1.0e-4))
         return rewards * self.cfg.disc_reward_scale
 
+    def deployment_actions(self, actor_obs: torch.Tensor) -> torch.Tensor:
+        return self.student_policy.deterministic(actor_obs)
+
+    def teacher_actions(
+        self,
+        critic_obs: torch.Tensor,
+        sample: bool = False,
+    ) -> torch.Tensor:
+        if sample:
+            actions, _ = self.teacher_policy.sample(critic_obs)
+            return actions
+        return self.teacher_policy.deterministic(critic_obs)
+
     def save(self, checkpoint_path: str | Path) -> None:
         payload = {
             "iteration": self.iteration,
             "config": self.cfg.__dict__,
-            "policy": self.policy.state_dict(),
+            "teacher_policy": self.teacher_policy.state_dict(),
+            "student_policy": self.student_policy.state_dict(),
             "value": self.value.state_dict(),
             "discriminator": self.discriminator.state_dict(),
-            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "teacher_optimizer": self.teacher_optimizer.state_dict(),
+            "student_optimizer": self.student_optimizer.state_dict(),
             "critic_optimizer": self.critic_optimizer.state_dict(),
             "disc_optimizer": self.disc_optimizer.state_dict(),
             "diff_normalizer": self.diff_normalizer.state_dict(),
@@ -335,10 +404,24 @@ class ADDTrainer:
     def load(self, checkpoint_path: str | Path) -> None:
         payload = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         self.iteration = int(payload.get("iteration", 0))
-        self.policy.load_state_dict(payload["policy"])
+
+        if "teacher_policy" in payload:
+            self.teacher_policy.load_state_dict(payload["teacher_policy"])
+        elif "policy" in payload:
+            self.teacher_policy.load_state_dict(payload["policy"])
+
+        if "student_policy" in payload:
+            self.student_policy.load_state_dict(payload["student_policy"])
+
         self.value.load_state_dict(payload["value"])
         self.discriminator.load_state_dict(payload["discriminator"])
-        self.actor_optimizer.load_state_dict(payload["actor_optimizer"])
+
+        if "teacher_optimizer" in payload:
+            self.teacher_optimizer.load_state_dict(payload["teacher_optimizer"])
+        elif "actor_optimizer" in payload:
+            self.teacher_optimizer.load_state_dict(payload["actor_optimizer"])
+        if "student_optimizer" in payload:
+            self.student_optimizer.load_state_dict(payload["student_optimizer"])
         self.critic_optimizer.load_state_dict(payload["critic_optimizer"])
         self.disc_optimizer.load_state_dict(payload["disc_optimizer"])
         self.diff_normalizer.load_state_dict(payload["diff_normalizer"])

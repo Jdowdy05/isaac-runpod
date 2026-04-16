@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--filter-stride-seconds", type=float, default=4.0)
     parser.add_argument("--min-contact-ratio", type=float, default=0.75)
     parser.add_argument("--max-double-air-ratio", type=float, default=0.08)
-    parser.add_argument("--max-root-speed", type=float, default=0.65)
+    parser.add_argument("--max-root-speed", type=float, default=0.45)
     parser.add_argument("--max-root-yaw-rate", type=float, default=2.5)
     parser.add_argument("--max-root-jerk", type=float, default=35.0)
     parser.add_argument("--min-pelvis-height", type=float, default=0.17)

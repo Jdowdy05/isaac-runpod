@@ -18,6 +18,7 @@ Last updated: 2026-04-16
 - Use the standalone diagnostic script `scripts/debug/test_newton_ground_contact.py` and the RunPod wrapper `scripts/runpod/test_newton_ground_contact.sh` to separate terrain/collision issues from policy or recording issues.
 - Use PhysX as the default OP3 backend for training and playback until the Newton collision issue is resolved.
 - Use the new playback debug options in `scripts/add/play.py` and `scripts/add/record_camera_playback.py` (`--print_stats_every`, `--sample_actions`) to distinguish broken action flow from a near-zero deterministic policy mean.
+- The current OP3 teleop stack is still missing the structural pieces that recent strong systems use: privileged teacher/student training, embodiment-aware control targets, stronger temporal modeling, and runtime robustness to operator/sensor variation.
 
 ## Open Questions
 
@@ -36,3 +37,4 @@ Last updated: 2026-04-16
 - Run the new Newton ground-contact diagnostic on RunPod and inspect whether `/World/ground` is valid, collision-enabled, and able to support the OP3 spawn configuration.
 - Investigate the OP3 USD collision setup under Newton, since the standalone diagnostic confirmed the plane exists and OP3 still falls through it in a minimal no-training test.
 - If playback looks motionless under PhysX, check deterministic action magnitudes before assuming the actor is disconnected; a live RunPod test showed nonzero observations and nonzero actions with deterministic means only around `0.003–0.016` after a one-iteration checkpoint, while sampled actions were around `0.03–0.12`.
+- The current AMASS feasibility filter already rejects clips above `0.65 m/s` root speed plus several other OP3-specific thresholds, but that cutoff may still be too loose for a low-torque OP3 policy trained from sparse commands.

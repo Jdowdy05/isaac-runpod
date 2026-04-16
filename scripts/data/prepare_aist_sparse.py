@@ -45,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--stride", type=int, default=2, help="Subsample factor from 60 Hz.")
     parser.add_argument("--min-frames", type=int, default=60)
+    parser.add_argument("--max-root-speed", type=float, default=0.45)
     parser.add_argument("--limit", type=int, default=None)
     return parser.parse_args()
 
@@ -283,6 +284,7 @@ def main() -> None:
     sequence_starts: list[int] = []
     sequence_lengths: list[int] = []
     total_frames = 0
+    filtered_for_speed = 0
 
     sequence_paths = sorted(keypoints_root.glob("*.pkl"))
     if args.limit is not None:
@@ -301,6 +303,10 @@ def main() -> None:
             keypoints3d,
             effective_fps=effective_fps,
         )
+        max_root_speed = float(np.linalg.norm(target_lin_vel_xy, axis=-1).max())
+        if max_root_speed > args.max_root_speed:
+            filtered_for_speed += 1
+            continue
 
         position_blocks.append(positions)
         orientation_blocks.append(orientations)
@@ -332,6 +338,7 @@ def main() -> None:
     print(f"Wrote sparse AIST dataset to: {args.output}")
     print(f"Sequences: {len(sequence_starts)}")
     print(f"Frames: {total_frames}")
+    print(f"Filtered for speed: {filtered_for_speed}")
 
 
 if __name__ == "__main__":

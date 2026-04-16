@@ -12,7 +12,7 @@ from op3_teleop_lab.assets.op3 import resolve_op3_cfg
 from op3_teleop_lab.utils.physics import build_sim_cfg
 
 from .constants import SPARSE_POSE_DIM
-from .robot_profile import make_default_op3_profile
+from .robot_profile import get_action_joint_names, make_default_op3_profile
 
 PHYSICS_DT = 0.002
 POLICY_CONTROL_HZ = 50.0
@@ -32,6 +32,10 @@ def compute_actor_obs_dim(action_dim: int, history_steps: int) -> int:
 def compute_critic_obs_dim(action_dim: int, history_steps: int) -> int:
     privileged_dim = 3 + 1 + CONTACT_GROUP_COUNT + CONTACT_GROUP_COUNT + CONTACT_GROUP_COUNT
     return compute_actor_obs_dim(action_dim, history_steps) + privileged_dim
+
+
+def compute_action_dim(profile) -> int:
+    return len(get_action_joint_names(profile))
 
 if POLICY_DECIMATION != 10:
     raise ValueError(
@@ -77,6 +81,9 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     reset_lin_vel_noise = 0.1
     reset_ang_vel_noise = 0.2
     reset_joint_pos_noise = 0.08
+    torque_curriculum_initial_scale = 2.0
+    torque_curriculum_final_scale = 1.0
+    torque_curriculum_steps = 5000
 
     teleop_mode = "synthetic"
     teleop_dataset_path: str | None = None
@@ -99,7 +106,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     profile = make_default_op3_profile()
     robot = resolve_op3_cfg().replace(prim_path="/World/envs/env_.*/Robot")
 
-    action_space = len(profile.joint_names)
+    action_space = compute_action_dim(profile)
     observation_space = compute_actor_obs_dim(action_space, actor_history_steps)
     critic_observation_space = compute_critic_obs_dim(action_space, actor_history_steps)
     state_space = 0
@@ -112,7 +119,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
         self.teleop_dataset_path = os.environ.get("OP3_TELEOP_DATASET_PATH", self.teleop_dataset_path)
         self.decimation = POLICY_DECIMATION
         self.sim = build_sim_cfg(self.physics_engine, dt=PHYSICS_DT, render_interval=self.decimation)
-        self.action_space = len(self.profile.joint_names)
+        self.action_space = compute_action_dim(self.profile)
         self.observation_space = compute_actor_obs_dim(self.action_space, self.actor_history_steps)
         self.critic_observation_space = compute_critic_obs_dim(self.action_space, self.actor_history_steps)
         self.state_space = 0

@@ -16,18 +16,22 @@ class OptimizerConfig:
 
 @dataclass
 class ADDTrainingConfig:
-    actor_hidden_dims: tuple[int, ...] = (1024, 512)
+    teacher_hidden_dims: tuple[int, ...] = (1024, 512)
+    student_hidden_dims: tuple[int, ...] = (512,)
     critic_hidden_dims: tuple[int, ...] = (1024, 512)
     disc_hidden_dims: tuple[int, ...] = (1024, 512)
     activation: str = "relu"
-    fixed_action_std: float = 0.05
+    teacher_exploration_std: float = 0.05
+    student_rnn_hidden_dim: int = 256
 
     rollout_steps: int = 32
     max_iterations: int = 5000
-    actor_epochs: int = 5
+    teacher_epochs: int = 5
     critic_epochs: int = 2
     disc_epochs: int = 2
+    student_epochs: int = 2
     minibatch_size: int = 16384
+    student_batch_size: int = 16384
 
     discount: float = 0.99
     gae_lambda: float = 0.95
@@ -44,8 +48,10 @@ class ADDTrainingConfig:
 
     task_reward_weight: float = 0.0
     disc_reward_weight: float = 1.0
+    student_bc_weight: float = 1.0
 
-    actor_optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    teacher_optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    student_optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     critic_optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     disc_optimizer: OptimizerConfig = field(
         default_factory=lambda: OptimizerConfig(
@@ -68,19 +74,35 @@ class ADDTrainingConfig:
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "ADDTrainingConfig":
         config = ADDTrainingConfig()
-        for field_name in ("actor_hidden_dims", "critic_hidden_dims", "disc_hidden_dims"):
+        if "actor_hidden_dims" in data and "teacher_hidden_dims" not in data:
+            data = dict(data)
+            data["teacher_hidden_dims"] = data["actor_hidden_dims"]
+        if "fixed_action_std" in data and "teacher_exploration_std" not in data:
+            data = dict(data)
+            data["teacher_exploration_std"] = data["fixed_action_std"]
+        if "actor_epochs" in data and "teacher_epochs" not in data:
+            data = dict(data)
+            data["teacher_epochs"] = data["actor_epochs"]
+        if "actor_optimizer" in data and "teacher_optimizer" not in data:
+            data = dict(data)
+            data["teacher_optimizer"] = data["actor_optimizer"]
+
+        for field_name in ("teacher_hidden_dims", "student_hidden_dims", "critic_hidden_dims", "disc_hidden_dims"):
             if field_name in data:
                 setattr(config, field_name, tuple(data[field_name]))
 
         for field_name in (
             "activation",
-            "fixed_action_std",
+            "teacher_exploration_std",
+            "student_rnn_hidden_dim",
             "rollout_steps",
             "max_iterations",
-            "actor_epochs",
+            "teacher_epochs",
             "critic_epochs",
             "disc_epochs",
+            "student_epochs",
             "minibatch_size",
+            "student_batch_size",
             "discount",
             "gae_lambda",
             "ppo_clip_ratio",
@@ -94,6 +116,7 @@ class ADDTrainingConfig:
             "disc_replay_samples",
             "task_reward_weight",
             "disc_reward_weight",
+            "student_bc_weight",
             "save_interval",
             "log_interval",
             "seed",
@@ -101,7 +124,7 @@ class ADDTrainingConfig:
             if field_name in data:
                 setattr(config, field_name, data[field_name])
 
-        for opt_name in ("actor_optimizer", "critic_optimizer", "disc_optimizer"):
+        for opt_name in ("teacher_optimizer", "student_optimizer", "critic_optimizer", "disc_optimizer"):
             if opt_name in data:
                 opt_data = data[opt_name]
                 setattr(
@@ -114,4 +137,3 @@ class ADDTrainingConfig:
                     ),
                 )
         return config
-

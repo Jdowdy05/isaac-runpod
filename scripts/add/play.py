@@ -21,7 +21,12 @@ def build_arg_parser():
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=2000)
-    parser.add_argument("--sample_actions", action="store_true", help="Sample actions from the policy instead of using the deterministic mean.")
+    parser.add_argument("--use_teacher", action="store_true", help="Play the privileged teacher instead of the deployment student.")
+    parser.add_argument(
+        "--sample_actions",
+        action="store_true",
+        help="Sample actions from the privileged teacher instead of using its deterministic mean.",
+    )
     parser.add_argument("--print_stats_every", type=int, default=0, help="Print observation and action statistics every N steps.")
     parser.add_argument("--video", action="store_true", help="Record an MP4 clip with gymnasium RecordVideo.")
     parser.add_argument("--video_length", type=int, default=1000)
@@ -52,6 +57,8 @@ def main() -> None:
 
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
+    if args.sample_actions and not args.use_teacher:
+        raise ValueError("--sample_actions is only supported together with --use_teacher.")
     enable_viser = (
         args.record_viser is not None
         or args.viser_share
@@ -149,14 +156,14 @@ def main() -> None:
     trainer.load(args.checkpoint)
 
     actor_obs = trainer.actor_obs
-    action_names = list(base_env.cfg.profile.joint_names)
+    action_names = list(getattr(base_env, "action_joint_names", base_env.cfg.profile.joint_names))
 
     with torch.no_grad():
         for step in range(args.steps):
-            if args.sample_actions:
-                actions, _ = trainer.policy.sample(actor_obs)
+            if args.use_teacher:
+                actions = trainer.teacher_actions(critic_obs, sample=args.sample_actions)
             else:
-                actions = trainer.policy.deterministic(actor_obs)
+                actions = trainer.deployment_actions(actor_obs)
 
             if args.print_stats_every > 0 and step % args.print_stats_every == 0:
                 action_abs = actions.abs()
@@ -170,6 +177,7 @@ def main() -> None:
 
             obs_dict, _, _, _, _ = env.step(actions)
             actor_obs = obs_dict["policy"]
+            critic_obs = obs_dict.get("critic", actor_obs)
 
     env.close()
     simulation_app.close()
