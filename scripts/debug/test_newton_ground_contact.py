@@ -53,6 +53,25 @@ def _resolve_body_id(robot, body_name: str) -> int:
     return int(body_ids[0])
 
 
+def _as_torch(value, device):
+    import torch
+
+    if isinstance(value, torch.Tensor):
+        return value
+    try:
+        import warp as wp  # type: ignore
+
+        try:
+            return wp.to_torch(value)
+        except Exception:
+            if hasattr(value, "contiguous"):
+                return wp.to_torch(value.contiguous())
+            raise
+    except ImportError:
+        pass
+    return torch.as_tensor(value, device=device)
+
+
 def main() -> None:
     parser = build_arg_parser()
     try:
@@ -100,11 +119,11 @@ def main() -> None:
     ground_summary = _summarize_ground_prim(stage.GetPrimAtPath(cfg.terrain.prim_path))
     print(json.dumps({"ground_summary": ground_summary}, sort_keys=True))
 
-    default_root_state = robot.data.default_root_state.clone()
+    default_root_state = _as_torch(robot.data.default_root_state, robot.device).clone()
     if default_root_state.ndim == 1:
         default_root_state = default_root_state.unsqueeze(0)
-    default_joint_pos = robot.data.default_joint_pos.clone()
-    default_joint_vel = robot.data.default_joint_vel.clone()
+    default_joint_pos = _as_torch(robot.data.default_joint_pos, robot.device).clone()
+    default_joint_vel = _as_torch(robot.data.default_joint_vel, robot.device).clone()
     if default_joint_pos.ndim == 1:
         default_joint_pos = default_joint_pos.unsqueeze(0)
     if default_joint_vel.ndim == 1:
@@ -126,10 +145,11 @@ def main() -> None:
         sim.step()
         robot.update(sim_dt)
 
-        root_pos_w = robot.data.root_pos_w[0]
-        root_quat_w = robot.data.root_quat_w[0]
-        left_foot_z = float(robot.data.body_pos_w[0, left_foot_id, 2].item())
-        right_foot_z = float(robot.data.body_pos_w[0, right_foot_id, 2].item())
+        root_pos_w = _as_torch(robot.data.root_pos_w, robot.device)[0]
+        root_quat_w = _as_torch(robot.data.root_quat_w, robot.device)[0]
+        body_pos_w = _as_torch(robot.data.body_pos_w, robot.device)
+        left_foot_z = float(body_pos_w[0, left_foot_id, 2].item())
+        right_foot_z = float(body_pos_w[0, right_foot_id, 2].item())
         root_z = float(root_pos_w[2].item())
 
         if step % args.print_every == 0 or root_z < args.z_fail:
