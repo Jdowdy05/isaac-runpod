@@ -21,6 +21,8 @@ def build_arg_parser():
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=2000)
+    parser.add_argument("--sample_actions", action="store_true", help="Sample actions from the policy instead of using the deterministic mean.")
+    parser.add_argument("--print_stats_every", type=int, default=0, help="Print observation and action statistics every N steps.")
     parser.add_argument("--video", action="store_true", help="Record an MP4 clip with gymnasium RecordVideo.")
     parser.add_argument("--video_length", type=int, default=1000)
     parser.add_argument("--video_dir", default=None)
@@ -34,6 +36,11 @@ def build_arg_parser():
     parser.add_argument("--viser_share", action="store_true")
     parser.add_argument("--viser_max_worlds", type=int, default=None)
     return parser
+
+
+def _format_action_stats(action_names: list[str], actions) -> str:
+    first_env_actions = actions[0].detach().cpu().tolist()
+    return ", ".join(f"{name}={value:+.4f}" for name, value in zip(action_names, first_env_actions, strict=True))
 
 
 def main() -> None:
@@ -142,9 +149,25 @@ def main() -> None:
     trainer.load(args.checkpoint)
 
     actor_obs = trainer.actor_obs
+    action_names = list(base_env.cfg.profile.joint_names)
+
     with torch.no_grad():
-        for _ in range(args.steps):
-            actions = trainer.policy.deterministic(actor_obs)
+        for step in range(args.steps):
+            if args.sample_actions:
+                actions, _ = trainer.policy.sample(actor_obs)
+            else:
+                actions = trainer.policy.deterministic(actor_obs)
+
+            if args.print_stats_every > 0 and step % args.print_stats_every == 0:
+                action_abs = actions.abs()
+                print(
+                    f"[play step {step}] obs_abs_mean={actor_obs.abs().mean().item():.6f} "
+                    f"obs_abs_max={actor_obs.abs().max().item():.6f} "
+                    f"action_abs_mean={action_abs.mean().item():.6f} "
+                    f"action_abs_max={action_abs.max().item():.6f}"
+                )
+                print(f"[play step {step}] actions_env0: {_format_action_stats(action_names, actions)}")
+
             obs_dict, _, _, _, _ = env.step(actions)
             actor_obs = obs_dict["policy"]
 

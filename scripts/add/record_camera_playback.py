@@ -23,6 +23,8 @@ def build_arg_parser():
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--sample_actions", action="store_true", help="Sample actions from the policy instead of using the deterministic mean.")
+    parser.add_argument("--print_stats_every", type=int, default=0, help="Print observation and action statistics every N steps.")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=50)
@@ -32,6 +34,11 @@ def build_arg_parser():
     parser.add_argument("--camera_target_height", type=float, default=0.35)
     parser.add_argument("--output", default=None)
     return parser
+
+
+def _format_action_stats(action_names: list[str], actions) -> str:
+    first_env_actions = actions[0].detach().cpu().tolist()
+    return ", ".join(f"{name}={value:+.4f}" for name, value in zip(action_names, first_env_actions, strict=True))
 
 
 def _default_dataset_path() -> tuple[str | None, str | None]:
@@ -151,6 +158,7 @@ def main() -> None:
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     actor_obs = trainer.actor_obs
+    action_names = list(base_env.cfg.profile.joint_names)
     with torch.no_grad():
         for step in range(args.steps):
             root_pos = base_env._as_torch(base_env.robot.data.root_pos_w)[0]
@@ -164,7 +172,20 @@ def main() -> None:
             )
             camera.set_world_poses_from_view(camera_position.unsqueeze(0), camera_target.unsqueeze(0))
 
-            actions = trainer.policy.deterministic(actor_obs)
+            if args.sample_actions:
+                actions, _ = trainer.policy.sample(actor_obs)
+            else:
+                actions = trainer.policy.deterministic(actor_obs)
+
+            if args.print_stats_every > 0 and step % args.print_stats_every == 0:
+                action_abs = actions.abs()
+                print(
+                    f"[record step {step}] obs_abs_mean={actor_obs.abs().mean().item():.6f} "
+                    f"obs_abs_max={actor_obs.abs().max().item():.6f} "
+                    f"action_abs_mean={action_abs.mean().item():.6f} "
+                    f"action_abs_max={action_abs.max().item():.6f}"
+                )
+                print(f"[record step {step}] actions_env0: {_format_action_stats(action_names, actions)}")
             obs_dict, _, _, _, _ = env.step(actions)
             actor_obs = obs_dict["policy"]
 
