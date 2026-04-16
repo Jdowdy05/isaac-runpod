@@ -9,8 +9,8 @@ from pathlib import Path
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Train OP3 teleoperation with ADD.")
-    parser.add_argument("--task", default="Isaac-OP3-Teleop-Newton-Direct-v0")
-    parser.add_argument("--num_envs", type=int, default=4096)
+    parser.add_argument("--task", default="Isaac-OP3-Teleop-Direct-v0")
+    parser.add_argument("--num_envs", type=int, default=2048)
     parser.add_argument("--teleop_mode", choices=("synthetic", "dataset"), default=None)
     parser.add_argument("--teleop_dataset_path", default=None)
     parser.add_argument(

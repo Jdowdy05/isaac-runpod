@@ -1,6 +1,6 @@
 # Active Context
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16
 
 ## Project Snapshot
 
@@ -16,6 +16,7 @@ Last updated: 2026-04-15
 - Position the paper around the miniature-humanoid challenge: low torque, reduced morphology similarity to humans, and a harder embodiment transfer problem than in recent full-sized humanoid teleoperation work.
 - Debug the OP3 Newton environment for possible ground-contact failure after playback showed the robot falling through the floor.
 - Use the standalone diagnostic script `scripts/debug/test_newton_ground_contact.py` and the RunPod wrapper `scripts/runpod/test_newton_ground_contact.sh` to separate terrain/collision issues from policy or recording issues.
+- Use PhysX as the default OP3 backend for training and playback until the Newton collision issue is resolved.
 
 ## Open Questions
 
@@ -32,3 +33,4 @@ Last updated: 2026-04-15
 - Add candidate projects and hypotheses to `idea-backlog.md`.
 - Add final quantitative plots and tables once the OP3 teleoperation experiments are stable enough for paper reporting.
 - Run the new Newton ground-contact diagnostic on RunPod and inspect whether `/World/ground` is valid, collision-enabled, and able to support the OP3 spawn configuration.
+- Investigate the OP3 USD collision setup under Newton, since the standalone diagnostic confirmed the plane exists and OP3 still falls through it in a minimal no-training test.
