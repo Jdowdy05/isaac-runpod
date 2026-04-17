@@ -83,7 +83,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     reset_joint_pos_noise = 0.08
     torque_curriculum_initial_scale = 2.0
     torque_curriculum_final_scale = 1.0
-    torque_curriculum_steps = 5000
+    torque_curriculum_steps = 50000
 
     teleop_mode = "synthetic"
     teleop_dataset_path: str | None = None

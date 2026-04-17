@@ -5,17 +5,17 @@ student_hidden_dims: [512, 256]
 critic_hidden_dims: [1024, 512]
 disc_hidden_dims: [1024, 512]
 activation: relu
-teacher_exploration_std: 0.05
+teacher_exploration_std: 0.02
 student_rnn_hidden_dim: 256
 
 rollout_steps: 32
-max_iterations: 5000
+max_iterations: 200000
 teacher_epochs: 5
 critic_epochs: 2
 disc_epochs: 2
-student_epochs: 2
+student_epochs: 5
 minibatch_size: 16384
-student_batch_size: 16384
+student_batch_size: 8192
 
 discount: 0.99
 gae_lambda: 0.95
@@ -30,7 +30,7 @@ disc_logit_reg: 0.01
 disc_replay_capacity: 200000
 disc_replay_samples: 1000
 
-task_reward_weight: 0.02
+task_reward_weight: 0.05
 disc_reward_weight: 1.0
 student_bc_weight: 1.0
 
@@ -39,8 +39,8 @@ teacher_optimizer:
   learning_rate: 1.0e-4
 
 student_optimizer:
-  type: sgd
-  learning_rate: 1.0e-4
+  type: adam
+  learning_rate: 3.0e-4
 
 critic_optimizer:
   type: sgd
@@ -48,8 +48,8 @@ critic_optimizer:
 
 disc_optimizer:
   type: sgd
-  learning_rate: 2.5e-4
+  learning_rate: 1.5e-4
   weight_decay: 1.0e-4
 
-save_interval: 100
+save_interval: 1000
 log_interval: 10
