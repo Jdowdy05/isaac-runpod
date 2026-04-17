@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import random
+from datetime import date
 from pathlib import Path
 
 
@@ -24,6 +25,24 @@ def build_arg_parser():
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--max_iterations", type=int, default=None)
     return parser
+
+
+def resolve_session_out_dir(base_out_dir: str | Path, checkpoint: str | None) -> Path:
+    if checkpoint:
+        return Path(checkpoint).resolve().parent
+
+    root = Path(base_out_dir).resolve()
+    date_stem = date.today().isoformat()
+    candidate = root / date_stem
+    if not candidate.exists():
+        return candidate
+
+    suffix = 2
+    while True:
+        candidate = root / f"{date_stem}_{suffix:02d}"
+        if not candidate.exists():
+            return candidate
+        suffix += 1
 
 
 def main() -> None:
@@ -57,6 +76,8 @@ def main() -> None:
     train_cfg = ADDTrainingConfig.from_yaml(args.config)
     if args.max_iterations is not None:
         train_cfg.max_iterations = args.max_iterations
+    session_out_dir = resolve_session_out_dir(args.out_dir, args.checkpoint)
+    print(f"Checkpoint directory: {session_out_dir}")
 
     random.seed(train_cfg.seed)
     np.random.seed(train_cfg.seed)
@@ -84,7 +105,7 @@ def main() -> None:
         diff_dim=diff.shape[-1],
         config=train_cfg,
         device=actor_obs.device,
-        out_dir=args.out_dir,
+        out_dir=session_out_dir,
         critic_obs_dim=critic_obs.shape[-1],
     )
     if args.checkpoint:
