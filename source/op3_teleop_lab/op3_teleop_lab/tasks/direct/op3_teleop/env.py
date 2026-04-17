@@ -246,6 +246,8 @@ class OP3TeleopEnv(DirectRLEnv):
             return None
         if tensor.numel() == 1:
             return tensor.repeat(joint_count)
+        if tensor.numel() % joint_count == 0:
+            return tensor.view(-1, joint_count)[0].clone()
         if tensor.numel() != joint_count:
             raise ValueError(f"Expected {joint_count} effort-limit values, got {tensor.numel()}.")
         return tensor.clone()
