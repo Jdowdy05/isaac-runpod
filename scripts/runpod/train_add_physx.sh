@@ -19,7 +19,7 @@ fi
 
 ARGS=(
   --task Isaac-OP3-Teleop-Direct-v0
-  --num_envs "${NUM_ENVS:-3072}"
+  --num_envs "${NUM_ENVS:-2048}"
   --teleop_mode "${TELEOP_MODE}"
   --headless
 )
