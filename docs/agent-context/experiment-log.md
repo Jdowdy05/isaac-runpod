@@ -40,3 +40,10 @@ Use this file for durable experiment history.
 - Result: Deterministic playback received nonzero observations and produced nonzero actions, but the action mean stayed very small (roughly `0.003–0.016` in normalized action units per joint). Sampled playback from the same checkpoint produced much larger actions (roughly `0.03–0.12`), confirming that action flow is working and that deterministic playback can appear nearly motionless when the learned mean remains close to zero.
 - Interpretation: The current “robot does nothing” symptom under PhysX is not caused by broken observation delivery, action delivery, or joint-name ordering. It is consistent with weak learning plus deterministic playback using the policy mean while training uses stochastic sampling.
 - Next action: Use the new playback diagnostics on later checkpoints, and if deterministic means remain near zero after substantial training, revisit the optimization setup rather than the action plumbing.
+
+- Date: 2026-04-21
+- Goal: Rebuild a clean RunPod environment and restart OP3 full-body teleoperation training using PhysX.
+- Setup: Cloned `Jdowdy05/isaac-runpod` onto new RunPod `knzldgd9e02d4b`, ran `scripts/runpod/bootstrap.sh`, transferred local SMPL-H model files and AMASS `SMPL+H G` subset archives with `runpodctl`, extracted AMASS, downloaded/preprocessed AIST++, ran `scripts/runpod/prepare_amass_dataset.sh`, and launched `scripts/runpod/train_add_physx.sh`.
+- Result: The merged dataset was rebuilt at `/workspace/isaac-runpod/data/processed/open/teleop_sparse_pose.npz` with `1,202,427` frames (`234,967` AIST frames plus `967,460` AMASS frames). PhysX training started from `logs/train_2026-04-21_05-34-00.log` with main Python PID `2999`.
+- Interpretation: The new pod is training-ready and uses the PhysX backend, avoiding the known Newton ground-contact issue. The training log may be buffered under `nohup`, so process/GPU checks are more reliable than tailing the log during early iterations.
+- Next action: Monitor the first metrics/checkpoint in `checkpoints/add/2026-04-21` and evaluate playback once a meaningful checkpoint is available.

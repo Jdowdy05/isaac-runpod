@@ -1,6 +1,6 @@
 # Active Context
 
-Last updated: 2026-04-16
+Last updated: 2026-04-21
 
 ## Project Snapshot
 
@@ -17,6 +17,8 @@ Last updated: 2026-04-16
 - Debug the OP3 Newton environment for possible ground-contact failure after playback showed the robot falling through the floor.
 - Use the standalone diagnostic script `scripts/debug/test_newton_ground_contact.py` and the RunPod wrapper `scripts/runpod/test_newton_ground_contact.sh` to separate terrain/collision issues from policy or recording issues.
 - Use PhysX as the default OP3 backend for training and playback until the Newton collision issue is resolved.
+- Current RunPod setup uses SSH target `knzldgd9e02d4b-644111ce@ssh.runpod.io` and PhysX training only.
+- The latest pod setup rebuilt the combined dataset at `/workspace/isaac-runpod/data/processed/open/teleop_sparse_pose.npz` from local AMASS archives plus AIST, then launched PhysX training from `logs/train_2026-04-21_05-34-00.log`.
 - Use the new playback debug options in `scripts/add/play.py` and `scripts/add/record_camera_playback.py` (`--print_stats_every`, `--sample_actions`) to distinguish broken action flow from a near-zero deterministic policy mean.
 - The current OP3 teleop stack is still missing the structural pieces that recent strong systems use: privileged teacher/student training, embodiment-aware control targets, stronger temporal modeling, and runtime robustness to operator/sensor variation.
 
