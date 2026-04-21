@@ -106,10 +106,22 @@ class ADDTrainer:
         # Backward-compatibility alias for scripts that still reference trainer.policy.
         self.policy = self.student_policy
 
+    def _teacher_exploration_std_for_iteration(self, iteration: int) -> float:
+        initial_std = float(self.cfg.teacher_exploration_std)
+        final_std = float(self.cfg.teacher_exploration_final_std)
+        decay_iterations = int(self.cfg.teacher_exploration_decay_iterations)
+        if decay_iterations <= 0:
+            return initial_std
+
+        progress = min(1.0, max(0.0, (iteration - 1) / decay_iterations))
+        return initial_std + progress * (final_std - initial_std)
+
     def train(self, num_iterations: int | None = None) -> None:
         max_iterations = num_iterations or self.cfg.max_iterations
         for iteration in range(1, max_iterations + 1):
             self.iteration = iteration
+            teacher_exploration_std = self._teacher_exploration_std_for_iteration(iteration)
+            self.teacher_policy.set_exploration_std(teacher_exploration_std)
             iter_start = time.time()
             rollout_stats = self.collect_rollout()
             teacher_stats = self.update_teacher()
@@ -121,6 +133,7 @@ class ADDTrainer:
                 log_data = {
                     "iteration": iteration,
                     "elapsed_s": round(elapsed, 3),
+                    "teacher_exploration_std": teacher_exploration_std,
                     **rollout_stats,
                     **teacher_stats,
                     **student_stats,
@@ -137,6 +150,8 @@ class ADDTrainer:
         completed_disc_returns = []
         teacher_action_abs_means = []
         student_action_abs_means = []
+        sampled_action_abs_means = []
+        sampled_action_abs_maxes = []
 
         for _ in range(self.cfg.rollout_steps):
             with torch.no_grad():
@@ -153,6 +168,9 @@ class ADDTrainer:
 
             teacher_action_abs_means.append(teacher_mean_actions.abs().mean().detach())
             student_action_abs_means.append(student_actions.abs().mean().detach())
+            sampled_action_abs = actions.abs()
+            sampled_action_abs_means.append(sampled_action_abs.mean().detach())
+            sampled_action_abs_maxes.append(sampled_action_abs.max().detach())
 
             self.rollout_buffer.add(
                 actor_obs=self.actor_obs,
@@ -204,6 +222,8 @@ class ADDTrainer:
             "episode_disc_return_mean": float(sum(completed_disc_returns) / max(1, len(completed_disc_returns))),
             "teacher_action_abs_mean": float(torch.stack(teacher_action_abs_means).mean().item()),
             "student_action_abs_mean": float(torch.stack(student_action_abs_means).mean().item()),
+            "sampled_action_abs_mean": float(torch.stack(sampled_action_abs_means).mean().item()),
+            "sampled_action_abs_max": float(torch.stack(sampled_action_abs_maxes).max().item()),
         }
 
     def update_teacher(self) -> dict[str, float]:

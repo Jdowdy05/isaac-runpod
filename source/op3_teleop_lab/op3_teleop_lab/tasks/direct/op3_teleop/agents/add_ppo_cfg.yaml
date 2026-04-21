@@ -5,7 +5,9 @@ student_hidden_dims: [512, 256]
 critic_hidden_dims: [1024, 512]
 disc_hidden_dims: [1024, 512]
 activation: relu
-teacher_exploration_std: 0.02
+teacher_exploration_std: 1.5
+teacher_exploration_final_std: 0.25
+teacher_exploration_decay_iterations: 50000
 student_rnn_hidden_dim: 256
 
 rollout_steps: 32

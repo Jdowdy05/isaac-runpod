@@ -21,7 +21,9 @@ class ADDTrainingConfig:
     critic_hidden_dims: tuple[int, ...] = (1024, 512)
     disc_hidden_dims: tuple[int, ...] = (1024, 512)
     activation: str = "relu"
-    teacher_exploration_std: float = 0.05
+    teacher_exploration_std: float = 1.5
+    teacher_exploration_final_std: float = 0.25
+    teacher_exploration_decay_iterations: int = 50000
     student_rnn_hidden_dim: int = 256
 
     rollout_steps: int = 32
@@ -94,6 +96,8 @@ class ADDTrainingConfig:
         for field_name in (
             "activation",
             "teacher_exploration_std",
+            "teacher_exploration_final_std",
+            "teacher_exploration_decay_iterations",
             "student_rnn_hidden_dim",
             "rollout_steps",
             "max_iterations",

@@ -54,6 +54,9 @@ class DeterministicTeacherPolicy(nn.Module):
         self.mean_net = build_mlp(obs_dim, hidden_dims, act_dim, act, output_scale=0.01)
         self.register_buffer("exploration_std", torch.full((act_dim,), exploration_std))
 
+    def set_exploration_std(self, std: float) -> None:
+        self.exploration_std.fill_(float(std))
+
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
         return self.mean_net(obs)
 
