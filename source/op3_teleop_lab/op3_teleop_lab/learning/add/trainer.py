@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import threading
 import time
+from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import nn
@@ -104,6 +108,9 @@ class ADDTrainer:
         self.actor_obs = obs_dict["policy"]
         self.critic_obs = obs_dict.get("critic", self.actor_obs)
         self.iteration = 0
+        self._checkpoint_thread: threading.Thread | None = None
+        self._checkpoint_error: BaseException | None = None
+        self._checkpoint_join_timeout_s = 120.0
 
         # Backward-compatibility alias for scripts that still reference trainer.policy.
         self.policy = self.student_policy
@@ -120,31 +127,34 @@ class ADDTrainer:
 
     def train(self, num_iterations: int | None = None) -> None:
         max_iterations = num_iterations or self.cfg.max_iterations
-        for iteration in range(1, max_iterations + 1):
-            self.iteration = iteration
-            teacher_exploration_std = self._teacher_exploration_std_for_iteration(iteration)
-            self.teacher_policy.set_exploration_std(teacher_exploration_std)
-            iter_start = time.time()
-            rollout_stats = self.collect_rollout()
-            teacher_stats = self.update_teacher()
-            student_stats = self.update_student()
-            disc_stats = self.update_discriminator()
-            elapsed = time.time() - iter_start
+        try:
+            for iteration in range(1, max_iterations + 1):
+                self.iteration = iteration
+                teacher_exploration_std = self._teacher_exploration_std_for_iteration(iteration)
+                self.teacher_policy.set_exploration_std(teacher_exploration_std)
+                iter_start = time.time()
+                rollout_stats = self.collect_rollout()
+                teacher_stats = self.update_teacher()
+                student_stats = self.update_student()
+                disc_stats = self.update_discriminator()
+                elapsed = time.time() - iter_start
 
-            if iteration % self.cfg.log_interval == 0 or iteration == 1:
-                log_data = {
-                    "iteration": iteration,
-                    "elapsed_s": round(elapsed, 3),
-                    "teacher_exploration_std": teacher_exploration_std,
-                    **rollout_stats,
-                    **teacher_stats,
-                    **student_stats,
-                    **disc_stats,
-                }
-                print(json.dumps(log_data, sort_keys=True))
+                if iteration % self.cfg.log_interval == 0 or iteration == 1:
+                    log_data = {
+                        "iteration": iteration,
+                        "elapsed_s": round(elapsed, 3),
+                        "teacher_exploration_std": teacher_exploration_std,
+                        **rollout_stats,
+                        **teacher_stats,
+                        **student_stats,
+                        **disc_stats,
+                    }
+                    print(json.dumps(log_data, sort_keys=True), flush=True)
 
-            if iteration % self.cfg.save_interval == 0 or iteration == max_iterations:
-                self.save(self.out_dir / f"add_op3_iter_{iteration:06d}.pt")
+                if iteration % self.cfg.save_interval == 0 or iteration == max_iterations:
+                    self.save(self.out_dir / f"add_op3_iter_{iteration:06d}.pt")
+        finally:
+            self.wait_for_pending_checkpoint()
 
     def collect_rollout(self) -> dict[str, float]:
         self.rollout_buffer.step = 0
@@ -407,10 +417,10 @@ class ADDTrainer:
             return actions
         return self.teacher_policy.deterministic(critic_obs)
 
-    def save(self, checkpoint_path: str | Path) -> None:
+    def _checkpoint_payload(self) -> dict[str, Any]:
         payload = {
             "iteration": self.iteration,
-            "config": self.cfg.__dict__,
+            "config": asdict(self.cfg),
             "teacher_policy": self.teacher_policy.state_dict(),
             "student_policy": self.student_policy.state_dict(),
             "value": self.value.state_dict(),
@@ -421,7 +431,82 @@ class ADDTrainer:
             "disc_optimizer": self.disc_optimizer.state_dict(),
             "diff_normalizer": self.diff_normalizer.state_dict(),
         }
-        torch.save(payload, checkpoint_path)
+        return self._detach_to_cpu(payload)
+
+    @classmethod
+    def _detach_to_cpu(cls, value: Any) -> Any:
+        if isinstance(value, torch.Tensor):
+            return value.detach().to(device="cpu", copy=True)
+        if isinstance(value, dict):
+            return {key: cls._detach_to_cpu(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [cls._detach_to_cpu(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(cls._detach_to_cpu(item) for item in value)
+        return value
+
+    def _write_checkpoint(self, payload: dict[str, Any], tmp_path: Path, checkpoint_path: Path) -> None:
+        try:
+            torch.save(payload, tmp_path)
+            os.replace(tmp_path, checkpoint_path)
+            print(f"Checkpoint saved: {checkpoint_path}", flush=True)
+        except BaseException as exc:
+            self._checkpoint_error = exc
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            print(f"Checkpoint save failed for {checkpoint_path}: {exc}", flush=True)
+
+    def _clear_finished_checkpoint_thread(self) -> None:
+        if self._checkpoint_thread is not None and not self._checkpoint_thread.is_alive():
+            self._checkpoint_thread.join(timeout=0.0)
+            self._checkpoint_thread = None
+        if self._checkpoint_error is not None:
+            error = self._checkpoint_error
+            self._checkpoint_error = None
+            raise RuntimeError("Previous checkpoint save failed.") from error
+
+    def wait_for_pending_checkpoint(self) -> None:
+        if self._checkpoint_thread is None:
+            return
+        self._checkpoint_thread.join(timeout=self._checkpoint_join_timeout_s)
+        if self._checkpoint_thread.is_alive():
+            print(
+                f"Checkpoint save is still running after {self._checkpoint_join_timeout_s:.0f}s; "
+                "continuing shutdown without blocking indefinitely.",
+                flush=True,
+            )
+            return
+        self._checkpoint_thread = None
+        self._clear_finished_checkpoint_thread()
+
+    def save(self, checkpoint_path: str | Path) -> None:
+        self._clear_finished_checkpoint_thread()
+        if self._checkpoint_thread is not None and self._checkpoint_thread.is_alive():
+            print(
+                f"Skipping checkpoint {checkpoint_path}; previous checkpoint save is still running.",
+                flush=True,
+            )
+            return
+
+        checkpoint_path = Path(checkpoint_path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = checkpoint_path.with_name(f".{checkpoint_path.name}.tmp")
+        snapshot_start = time.time()
+        print(f"Checkpoint snapshot started: {checkpoint_path}", flush=True)
+        payload = self._checkpoint_payload()
+        print(
+            f"Checkpoint snapshot prepared in {time.time() - snapshot_start:.2f}s: {checkpoint_path}",
+            flush=True,
+        )
+        self._checkpoint_thread = threading.Thread(
+            target=self._write_checkpoint,
+            args=(payload, tmp_path, checkpoint_path),
+            daemon=True,
+        )
+        self._checkpoint_thread.start()
+        print(f"Checkpoint save started: {checkpoint_path}", flush=True)
 
     def load(self, checkpoint_path: str | Path) -> None:
         payload = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
