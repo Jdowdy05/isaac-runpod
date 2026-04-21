@@ -69,6 +69,39 @@ def _frame_to_uint8(frame):
     return frame.astype(np.uint8)
 
 
+def _encode_video(frames_dir: Path, output_path: Path, fps: int) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is not None:
+        ffmpeg_cmd = [
+            ffmpeg,
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            str(frames_dir / "frame_%05d.png"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ]
+        subprocess.run(ffmpeg_cmd, check=True)
+        return
+
+    try:
+        import imageio.v2 as imageio
+    except ImportError as exc:
+        raise FileNotFoundError("ffmpeg or imageio is required to encode the playback video.") from exc
+
+    print("ffmpeg was not found; using imageio/imageio-ffmpeg to encode the playback video.")
+    frame_paths = sorted(frames_dir.glob("frame_*.png"))
+    if not frame_paths:
+        raise FileNotFoundError(f"No playback frames found in {frames_dir}.")
+    with imageio.get_writer(str(output_path), fps=fps, codec="libx264", macro_block_size=1) as writer:
+        for frame_path in frame_paths:
+            writer.append_data(imageio.imread(frame_path))
+
+
 def main() -> None:
     parser = build_arg_parser()
     try:
@@ -155,10 +188,6 @@ def main() -> None:
     output_path = Path(args.output) if args.output is not None else Path(args.checkpoint).resolve().parent / "videos" / "camera_playback.mp4"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise FileNotFoundError("ffmpeg is required to encode the playback video.")
-
     frames_dir = output_path.with_name(f"{output_path.stem}_frames")
     if frames_dir.exists():
         shutil.rmtree(frames_dir)
@@ -201,20 +230,7 @@ def main() -> None:
             frame = camera.data.output["rgb"][0].detach().cpu().numpy()[..., :3]
             Image.fromarray(_frame_to_uint8(frame)).save(frames_dir / f"frame_{step:05d}.png")
 
-    ffmpeg_cmd = [
-        ffmpeg,
-        "-y",
-        "-framerate",
-        str(args.fps),
-        "-i",
-        str(frames_dir / "frame_%05d.png"),
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        str(output_path),
-    ]
-    subprocess.run(ffmpeg_cmd, check=True)
+    _encode_video(frames_dir, output_path, args.fps)
 
     print(f"Saved camera playback video to: {output_path}")
 
