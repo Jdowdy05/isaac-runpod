@@ -20,6 +20,7 @@ POLICY_CONTROL_HZ = 50.0
 POLICY_DECIMATION = int(round(1.0 / (POLICY_CONTROL_HZ * PHYSICS_DT)))
 ACTOR_HISTORY_STEPS = 10
 CONTACT_GROUP_COUNT = 6
+CONTACT_SENSOR_BODY_REGEX = "l_el_link|r_el_link|l_knee_link|r_knee_link|l_ank_roll_link|r_ank_roll_link"
 
 
 def compute_actor_frame_dim(action_dim: int) -> int:
@@ -103,7 +104,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     profile = make_default_op3_profile()
     robot = resolve_op3_cfg().replace(prim_path="/World/envs/env_.*/Robot")
     contact_sensor = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/.*",
+        prim_path=f"/World/envs/env_.*/Robot/({CONTACT_SENSOR_BODY_REGEX})",
         history_length=3,
         track_air_time=True,
         force_threshold=1.0,
