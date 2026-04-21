@@ -47,3 +47,10 @@ Use this file for durable experiment history.
 - Result: The merged dataset was rebuilt at `/workspace/isaac-runpod/data/processed/open/teleop_sparse_pose.npz` with `1,202,427` frames (`234,967` AIST frames plus `967,460` AMASS frames). PhysX training started from `logs/train_2026-04-21_05-34-00.log` with main Python PID `2999`.
 - Interpretation: The new pod is training-ready and uses the PhysX backend, avoiding the known Newton ground-contact issue. The training log may be buffered under `nohup`, so process/GPU checks are more reliable than tailing the log during early iterations.
 - Next action: Monitor the first metrics/checkpoint in `checkpoints/add/2026-04-21` and evaluate playback once a meaningful checkpoint is available.
+
+- Date: 2026-04-21
+- Goal: Address checkpoint `5000` playback showing OP3 barely moving.
+- Setup: Stopped the previous PhysX ADD run, increased ADD teacher exploration from `0.02` fixed std to a schedule starting at `1.5` and decaying to `0.25` over `50000` iterations, added `sampled_action_abs_mean/max` logging, and tried larger environment counts based on low VRAM usage.
+- Result: `4096` and `3072` environments both stalled in Isaac startup before the first metric line, so the stable default was restored to `2048`. A new run started from `logs/train_2026-04-21_16-43-41.log` with checkpoint directory `/workspace/isaac-runpod/checkpoints/add/2026-04-21_04`; early metrics showed `sampled_action_abs_mean` about `1.19` with deterministic teacher/student means near `0.015`.
+- Interpretation: The motionless playback was consistent with near-zero deterministic policy means and very low prior exploration. The new run now explores substantially larger normalized actions while keeping the known-good `2048` environment count.
+- Next action: Let the run reach an early checkpoint, then replay deterministic and sampled teacher/student behavior to see whether the policy mean grows beyond the prior `0.06-0.07` range.

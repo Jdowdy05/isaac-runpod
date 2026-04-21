@@ -18,7 +18,10 @@ Last updated: 2026-04-21
 - Use the standalone diagnostic script `scripts/debug/test_newton_ground_contact.py` and the RunPod wrapper `scripts/runpod/test_newton_ground_contact.sh` to separate terrain/collision issues from policy or recording issues.
 - Use PhysX as the default OP3 backend for training and playback until the Newton collision issue is resolved.
 - Current RunPod setup uses SSH target `knzldgd9e02d4b-644111ce@ssh.runpod.io` and PhysX training only.
-- The latest pod setup rebuilt the combined dataset at `/workspace/isaac-runpod/data/processed/open/teleop_sparse_pose.npz` from local AMASS archives plus AIST, then launched PhysX training from `logs/train_2026-04-21_05-34-00.log`.
+- The current PhysX ADD training run uses log `logs/train_2026-04-21_16-43-41.log`, checkpoint directory `/workspace/isaac-runpod/checkpoints/add/2026-04-21_04`, and main Python PID `11317`.
+- ADD teacher exploration now starts at `teacher_exploration_std=1.5`, decays to `0.25` over `50000` iterations, and logs sampled action magnitude separately from deterministic teacher/student action means.
+- Attempts to increase PhysX training above `2048` environments (`4096`, then `3072`) stalled in Isaac startup for more than six minutes before any metric line, so `2048` remains the stable RunPod default until scene setup/replication is optimized.
+- The latest pod setup rebuilt the combined dataset at `/workspace/isaac-runpod/data/processed/open/teleop_sparse_pose.npz` from local AMASS archives plus AIST, then launched PhysX training from `logs/train_2026-04-21_05-34-00.log`; that earlier run was stopped after checkpoint `5000` playback showed very small deterministic policy motions.
 - Use the new playback debug options in `scripts/add/play.py` and `scripts/add/record_camera_playback.py` (`--print_stats_every`, `--sample_actions`) to distinguish broken action flow from a near-zero deterministic policy mean.
 - The current OP3 teleop stack is still missing the structural pieces that recent strong systems use: privileged teacher/student training, embodiment-aware control targets, stronger temporal modeling, and runtime robustness to operator/sensor variation.
 
