@@ -7,6 +7,16 @@ import shutil
 import subprocess
 from pathlib import Path
 
+_STATE_CONNECTIONS = (
+    ("pelvis", "head"),
+    ("pelvis", "left_hand"),
+    ("pelvis", "right_hand"),
+    ("pelvis", "left_knee"),
+    ("left_knee", "left_foot"),
+    ("pelvis", "right_knee"),
+    ("right_knee", "right_foot"),
+)
+
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Record an OP3 ADD checkpoint with a headless camera sensor.")
@@ -37,6 +47,11 @@ def build_arg_parser():
     parser.add_argument("--camera_side_offset", type=float, default=-1.6)
     parser.add_argument("--camera_height_offset", type=float, default=1.0)
     parser.add_argument("--camera_target_height", type=float, default=0.35)
+    parser.add_argument(
+        "--state_video",
+        action="store_true",
+        help="Record a renderer-free 2-D state visualization instead of an Isaac camera render.",
+    )
     parser.add_argument("--output", default=None)
     return parser
 
@@ -102,6 +117,107 @@ def _encode_video(frames_dir: Path, output_path: Path, fps: int) -> None:
             writer.append_data(imageio.imread(frame_path))
 
 
+def _draw_state_frame(
+    *,
+    base_env,
+    tracked_segments: tuple[str, ...],
+    segment_index: dict[str, int],
+    actions,
+    step: int,
+    width: int,
+    height: int,
+):
+    from PIL import Image, ImageDraw
+    import torch
+
+    image = Image.new("RGB", (width, height), (247, 248, 245))
+    draw = ImageDraw.Draw(image)
+
+    root_pos = base_env._as_torch(base_env.robot.data.root_pos_w)[0].detach().cpu()
+    body_pos_w = base_env._as_torch(base_env.robot.data.body_pos_w)[0].detach().cpu()
+    command_pos = base_env.teleop_command.positions[0].detach().cpu()
+
+    actual = {}
+    target = {}
+    for segment_name in tracked_segments:
+        seg_idx = segment_index[segment_name]
+        if segment_name == "pelvis":
+            actual[segment_name] = torch.zeros(3)
+        else:
+            body_id = base_env._body_ids[segment_name]
+            actual[segment_name] = body_pos_w[body_id] - root_pos
+        target[segment_name] = command_pos[seg_idx]
+
+    root_height = float(root_pos[2].item())
+    action_abs_mean = float(actions.abs().mean().item())
+    action_abs_max = float(actions.abs().max().item())
+
+    header = (
+        f"checkpoint playback | step {step:04d} | root_z={root_height:.3f} m | "
+        f"action_abs_mean={action_abs_mean:.4f} | action_abs_max={action_abs_max:.4f}"
+    )
+    draw.text((24, 16), header, fill=(24, 28, 32))
+
+    panels = (
+        ("side view: x-z", (24, 56, width // 2 - 16, height - 30), (0, 2)),
+        ("top view: x-y", (width // 2 + 16, 56, width - 24, height - 30), (0, 1)),
+    )
+    colors = {
+        "actual": (37, 97, 180),
+        "target": (218, 121, 38),
+        "grid": (218, 221, 216),
+        "axis": (90, 95, 90),
+        "floor": (58, 66, 60),
+    }
+
+    def project(point, panel, axes, scale):
+        left, top, right, bottom = panel
+        cx = (left + right) * 0.5
+        cy = (top + bottom) * 0.54
+        x = cx + float(point[axes[0]].item()) * scale
+        y = cy - float(point[axes[1]].item()) * scale
+        return (int(round(x)), int(round(y)))
+
+    def draw_pose(points, panel, axes, color, width_px):
+        scale = min((panel[2] - panel[0]) / 1.1, (panel[3] - panel[1]) / 0.9)
+        for a, b in _STATE_CONNECTIONS:
+            if a in points and b in points:
+                draw.line((project(points[a], panel, axes, scale), project(points[b], panel, axes, scale)), fill=color, width=width_px)
+        for name, point in points.items():
+            px, py = project(point, panel, axes, scale)
+            radius = 6 if name == "pelvis" else 4
+            draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=color)
+
+    for label, panel, axes in panels:
+        left, top, right, bottom = panel
+        draw.rounded_rectangle(panel, radius=14, fill=(255, 255, 252), outline=(208, 211, 204), width=1)
+        draw.text((left + 14, top + 12), label, fill=(24, 28, 32))
+        scale = min((right - left) / 1.1, (bottom - top) / 0.9)
+        center_x = int(round((left + right) * 0.5))
+        center_y = int(round((top + bottom) * 0.54))
+        for offset in range(-4, 5):
+            x = int(round(center_x + offset * 0.1 * scale))
+            y = int(round(center_y + offset * 0.1 * scale))
+            draw.line((x, top + 42, x, bottom - 12), fill=colors["grid"], width=1)
+            draw.line((left + 12, y, right - 12, y), fill=colors["grid"], width=1)
+        draw.line((left + 12, center_y, right - 12, center_y), fill=colors["axis"], width=1)
+        draw.line((center_x, top + 42, center_x, bottom - 12), fill=colors["axis"], width=1)
+        if axes == (0, 2):
+            floor_y = int(round(center_y + root_height * scale))
+            draw.line((left + 12, floor_y, right - 12, floor_y), fill=colors["floor"], width=2)
+            draw.text((left + 14, min(floor_y + 4, bottom - 26)), "floor z=0", fill=colors["floor"])
+
+        draw_pose(target, panel, axes, colors["target"], 3)
+        draw_pose(actual, panel, axes, colors["actual"], 4)
+
+    legend_y = height - 22
+    draw.line((24, legend_y, 60, legend_y), fill=colors["actual"], width=4)
+    draw.text((68, legend_y - 8), "actual OP3 sparse bodies", fill=(24, 28, 32))
+    draw.line((260, legend_y, 296, legend_y), fill=colors["target"], width=3)
+    draw.text((304, legend_y - 8), "target sparse command", fill=(24, 28, 32))
+    return image
+
+
 def main() -> None:
     parser = build_arg_parser()
     try:
@@ -114,7 +230,7 @@ def main() -> None:
     if args.sample_actions and not args.use_teacher:
         raise ValueError("--sample_actions is only supported together with --use_teacher.")
     if hasattr(args, "enable_cameras"):
-        args.enable_cameras = True
+        args.enable_cameras = not args.state_video
     app_launcher = AppLauncher(args)
     simulation_app = app_launcher.app
 
@@ -122,10 +238,9 @@ def main() -> None:
     import torch
     from PIL import Image
 
-    import isaaclab.sim as sim_utils
-    from isaaclab.sensors.camera import Camera, CameraCfg
     from op3_teleop_lab.learning.add.config import ADDTrainingConfig
     from op3_teleop_lab.learning.add.trainer import ADDTrainer
+    from op3_teleop_lab.tasks.direct.op3_teleop.constants import SEGMENT_INDEX, TRACKED_SEGMENTS
     from op3_teleop_lab.tasks.direct.op3_teleop.env_cfg import OP3TeleopEnvCfg, OP3TeleopNewtonEnvCfg
     import op3_teleop_lab.tasks  # noqa: F401
 
@@ -143,24 +258,29 @@ def main() -> None:
     env = gym.make(args.task, cfg=cfg)
     base_env = env.unwrapped
 
-    camera_cfg = CameraCfg(
-        prim_path="/World/PlaybackCamera",
-        update_period=0,
-        height=args.height,
-        width=args.width,
-        data_types=["rgb"],
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=24.0,
-            focus_distance=400.0,
-            horizontal_aperture=20.955,
-            clipping_range=(0.01, 1.0e5),
-        ),
-    )
-    camera = Camera(cfg=camera_cfg)
-    if not camera.is_initialized:
-        camera._initialize_impl()
-        camera._is_initialized = True
-    camera.reset()
+    camera = None
+    if not args.state_video:
+        import isaaclab.sim as sim_utils
+        from isaaclab.sensors.camera import Camera, CameraCfg
+
+        camera_cfg = CameraCfg(
+            prim_path="/World/PlaybackCamera",
+            update_period=0,
+            height=args.height,
+            width=args.width,
+            data_types=["rgb"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=24.0,
+                focus_distance=400.0,
+                horizontal_aperture=20.955,
+                clipping_range=(0.01, 1.0e5),
+            ),
+        )
+        camera = Camera(cfg=camera_cfg)
+        if not camera.is_initialized:
+            camera._initialize_impl()
+            camera._is_initialized = True
+        camera.reset()
 
     obs_dict, extras = env.reset()
     actor_obs = obs_dict["policy"]
@@ -195,18 +315,20 @@ def main() -> None:
 
     actor_obs = trainer.actor_obs
     action_names = list(getattr(base_env, "action_joint_names", base_env.cfg.profile.joint_names))
+    use_state_video = args.state_video
     with torch.no_grad():
         for step in range(args.steps):
             root_pos = base_env._as_torch(base_env.robot.data.root_pos_w)[0]
-            camera_position = root_pos + torch.tensor(
-                [args.camera_distance, args.camera_side_offset, args.camera_height_offset],
-                device=actor_obs.device,
-            )
-            camera_target = root_pos + torch.tensor(
-                [0.0, 0.0, args.camera_target_height],
-                device=actor_obs.device,
-            )
-            camera.set_world_poses_from_view(camera_position.unsqueeze(0), camera_target.unsqueeze(0))
+            if not use_state_video and camera is not None:
+                camera_position = root_pos + torch.tensor(
+                    [args.camera_distance, args.camera_side_offset, args.camera_height_offset],
+                    device=actor_obs.device,
+                )
+                camera_target = root_pos + torch.tensor(
+                    [0.0, 0.0, args.camera_target_height],
+                    device=actor_obs.device,
+                )
+                camera.set_world_poses_from_view(camera_position.unsqueeze(0), camera_target.unsqueeze(0))
 
             if args.use_teacher:
                 actions = trainer.teacher_actions(critic_obs, sample=args.sample_actions)
@@ -226,9 +348,37 @@ def main() -> None:
             actor_obs = obs_dict["policy"]
             critic_obs = obs_dict.get("critic", actor_obs)
 
-            camera.update(dt=base_env.physics_dt)
-            frame = camera.data.output["rgb"][0].detach().cpu().numpy()[..., :3]
-            Image.fromarray(_frame_to_uint8(frame)).save(frames_dir / f"frame_{step:05d}.png")
+            if use_state_video or camera is None:
+                frame_image = _draw_state_frame(
+                    base_env=base_env,
+                    tracked_segments=TRACKED_SEGMENTS,
+                    segment_index=SEGMENT_INDEX,
+                    actions=actions,
+                    step=step,
+                    width=args.width,
+                    height=args.height,
+                )
+            else:
+                try:
+                    camera.update(dt=base_env.physics_dt)
+                    frame = camera.data.output["rgb"][0].detach().cpu().numpy()[..., :3]
+                    frame_uint8 = _frame_to_uint8(frame)
+                    if frame_uint8.ndim != 3 or frame_uint8.shape[0] == 0 or frame_uint8.shape[1] == 0:
+                        raise ValueError(f"Invalid camera frame shape: {tuple(frame_uint8.shape)}")
+                    frame_image = Image.fromarray(frame_uint8)
+                except Exception as exc:
+                    print(f"Camera capture failed at step {step}: {exc}. Falling back to renderer-free state video.")
+                    use_state_video = True
+                    frame_image = _draw_state_frame(
+                        base_env=base_env,
+                        tracked_segments=TRACKED_SEGMENTS,
+                        segment_index=SEGMENT_INDEX,
+                        actions=actions,
+                        step=step,
+                        width=args.width,
+                        height=args.height,
+                    )
+            frame_image.save(frames_dir / f"frame_{step:05d}.png")
 
     _encode_video(frames_dir, output_path, args.fps)
 
