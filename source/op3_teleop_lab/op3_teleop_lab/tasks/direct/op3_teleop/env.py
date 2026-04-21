@@ -5,6 +5,7 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
+from isaaclab.sensors import ContactSensor
 
 from .constants import SEGMENT_INDEX, SPARSE_POSE_DIM, TRACKED_SEGMENTS
 from .env_cfg import OP3TeleopEnvCfg
@@ -100,18 +101,16 @@ class OP3TeleopEnv(DirectRLEnv):
             dtype=torch.long,
             device=self.device,
         )
-        self._contact_height_thresholds = torch.tensor(
+        self._contact_sensor_body_ids = self._resolve_contact_sensor_body_ids()
+        self._foot_contact_feature_ids = torch.tensor(
             [
-                self.cfg.hand_contact_height_threshold,
-                self.cfg.hand_contact_height_threshold,
-                self.cfg.knee_contact_height_threshold,
-                self.cfg.knee_contact_height_threshold,
-                self.cfg.foot_contact_height_threshold,
-                self.cfg.foot_contact_height_threshold,
+                self._contact_segments.index("left_foot"),
+                self._contact_segments.index("right_foot"),
             ],
-            dtype=torch.float32,
+            dtype=torch.long,
             device=self.device,
         )
+        self._foot_body_ids = torch.index_select(self._contact_body_ids, dim=0, index=self._foot_contact_feature_ids)
         self._mass_view = getattr(self.robot, "root_physx_view", None)
         self._default_link_masses = None
         self._mass_randomization_enabled = False
@@ -167,8 +166,19 @@ class OP3TeleopEnv(DirectRLEnv):
             body_ids[segment_name] = int(ids[0])
         return body_ids
 
+    def _resolve_contact_sensor_body_ids(self) -> torch.Tensor:
+        body_names = [self.cfg.profile.segment_to_body_name[name] for name in self._contact_segments]
+        ids, resolved_names = self.contact_sensor.find_bodies(body_names, preserve_order=True)
+        if len(ids) != len(body_names):
+            raise ValueError(
+                "Could not resolve all OP3 contact-sensor bodies. "
+                f"Expected {tuple(body_names)}, resolved {tuple(resolved_names)}."
+            )
+        return torch.tensor(ids, dtype=torch.long, device=self.device)
+
     def _setup_scene(self) -> None:
         self.robot = Articulation(self.cfg.robot)
+        self.contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self.terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -176,6 +186,7 @@ class OP3TeleopEnv(DirectRLEnv):
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
         self.scene.articulations["robot"] = self.robot
+        self.scene.sensors["contact_sensor"] = self.contact_sensor
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.8, 0.8, 0.8))
         light_cfg.func("/World/Light", light_cfg)
 
@@ -366,16 +377,21 @@ class OP3TeleopEnv(DirectRLEnv):
 
         return torch.zeros((self.num_envs, len(self.robot.body_names), 3), dtype=torch.float32, device=self.device)
 
+    def _get_contact_times(self) -> torch.Tensor:
+        current_contact_time = self.contact_sensor.data.current_contact_time
+        if current_contact_time is None:
+            return torch.zeros((self.num_envs, len(self._contact_segments)), dtype=torch.float32, device=self.device)
+
+        contact_time = self._as_torch(current_contact_time)
+        return torch.index_select(contact_time, dim=1, index=self._contact_sensor_body_ids)
+
     def _compute_contact_features(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         body_pos_w = self._as_torch(self.robot.data.body_pos_w)
         body_vel_w = self._get_body_linear_velocity_w()
 
         contact_heights = body_pos_w[:, self._contact_body_ids, 2]
         contact_speeds = torch.linalg.norm(body_vel_w[:, self._contact_body_ids], dim=-1)
-        contact_flags = (
-            (contact_heights <= self._contact_height_thresholds.unsqueeze(0))
-            & (contact_speeds <= self.cfg.contact_speed_threshold)
-        ).float()
+        contact_flags = (self._get_contact_times() > 0.0).float()
         return contact_flags, contact_heights, contact_speeds
 
     def _update_actor_history(self, actor_frame: torch.Tensor) -> torch.Tensor:
@@ -485,10 +501,12 @@ class OP3TeleopEnv(DirectRLEnv):
         root_height = root_pos[:, 2]
         root_height_reward = torch.exp(-30.0 * (root_height - self._default_root_height).square())
 
-        contact_flags, _, contact_speeds = self._compute_contact_features()
-        foot_contact = contact_flags[:, -2:]
-        foot_speed = contact_speeds[:, -2:]
-        foot_slip_penalty = torch.sum(foot_contact * foot_speed.square(), dim=-1)
+        contact_flags, _, _ = self._compute_contact_features()
+        foot_contact = torch.index_select(contact_flags, dim=1, index=self._foot_contact_feature_ids)
+        body_vel_w = self._get_body_linear_velocity_w()
+        foot_vel_w = torch.index_select(body_vel_w, dim=1, index=self._foot_body_ids)
+        foot_planar_speed = torch.linalg.norm(foot_vel_w[..., :2], dim=-1)
+        foot_slip_penalty = torch.sum(foot_contact * foot_planar_speed.square(), dim=-1)
 
         action_rate_penalty = torch.sum((self.actions - self.prev_actions).square(), dim=-1)
         joint_pos = self._select_joint_columns(self.robot.data.joint_pos)

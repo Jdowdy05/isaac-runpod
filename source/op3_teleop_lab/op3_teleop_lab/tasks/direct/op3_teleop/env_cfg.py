@@ -5,6 +5,7 @@ import os
 import isaaclab.sim as sim_utils
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 
@@ -68,10 +69,6 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     termination_tilt_angle = 1.2
     pose_tracking_sigma = 12.0
     body_orientation_sigma = 6.0
-    foot_contact_height_threshold = 0.08
-    knee_contact_height_threshold = 0.16
-    hand_contact_height_threshold = 0.16
-    contact_speed_threshold = 0.75
 
     mass_scale_range = (0.8, 1.2)
     joint_gain_scale_range = (0.5, 1.5)
@@ -81,7 +78,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     reset_lin_vel_noise = 0.1
     reset_ang_vel_noise = 0.2
     reset_joint_pos_noise = 0.08
-    torque_curriculum_initial_scale = 2.0
+    torque_curriculum_initial_scale = 3.0
     torque_curriculum_final_scale = 1.0
     torque_curriculum_steps = 50000
 
@@ -105,6 +102,12 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
 
     profile = make_default_op3_profile()
     robot = resolve_op3_cfg().replace(prim_path="/World/envs/env_.*/Robot")
+    contact_sensor = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",
+        history_length=3,
+        track_air_time=True,
+        force_threshold=1.0,
+    )
 
     action_space = compute_action_dim(profile)
     observation_space = compute_actor_obs_dim(action_space, actor_history_steps)

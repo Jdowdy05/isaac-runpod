@@ -58,6 +58,7 @@ class ADDTrainer:
             hidden_dims=config.teacher_hidden_dims,
             activation=config.activation,
             exploration_std=config.teacher_exploration_std,
+            output_init_scale=config.teacher_output_init_scale,
         ).to(device)
         self.student_policy = TemporalStudentPolicy(
             obs_dim=obs_dim,
@@ -66,6 +67,7 @@ class ADDTrainer:
             rnn_hidden_dim=config.student_rnn_hidden_dim,
             hidden_dims=config.student_hidden_dims,
             activation=config.activation,
+            output_init_scale=config.student_output_init_scale,
         ).to(device)
         self.value = ValueNetwork(
             obs_dim=self.critic_obs_dim,

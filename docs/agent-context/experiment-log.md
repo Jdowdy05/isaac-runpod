@@ -54,3 +54,10 @@ Use this file for durable experiment history.
 - Result: `4096` and `3072` environments both stalled in Isaac startup before the first metric line, so the stable default was restored to `2048`. A new run started from `logs/train_2026-04-21_16-43-41.log` with checkpoint directory `/workspace/isaac-runpod/checkpoints/add/2026-04-21_04`; early metrics showed `sampled_action_abs_mean` about `1.19` with deterministic teacher/student means near `0.015`.
 - Interpretation: The motionless playback was consistent with near-zero deterministic policy means and very low prior exploration. The new run now explores substantially larger normalized actions while keeping the known-good `2048` environment count.
 - Next action: Let the run reach an early checkpoint, then replay deterministic and sampled teacher/student behavior to see whether the policy mean grows beyond the prior `0.06-0.07` range.
+
+- Date: 2026-04-21
+- Goal: Remove contact-reward false positives and make initial policy outputs less near-zero.
+- Setup: Replaced height/speed contact heuristics for hands, knees, and feet with Isaac Lab `ContactSensor.current_contact_time`, changed foot slip to penalize planar foot velocity only while the foot is actually in simulator contact, increased the torque curriculum initial scale from `2.0` to `3.0`, and made teacher/student output-head initialization configurable with `0.1` defaults.
+- Result: Contact flags no longer depend on static link heights such as knees being near `0.16 m` or OP3 feet rarely clearing `0.08 m`. The torque curriculum still writes both actuator runtime limits and PhysX solver effort limits.
+- Interpretation: This should remove false contact positives while preserving privileged critic contact/height/speed features and should make deterministic teacher/student means start less close to zero.
+- Next action: Restart training after pulling this patch on RunPod; the active run does not pick up these code changes until it is restarted.

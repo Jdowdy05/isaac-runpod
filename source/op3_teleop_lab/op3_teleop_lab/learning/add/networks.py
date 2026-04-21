@@ -48,10 +48,11 @@ class DeterministicTeacherPolicy(nn.Module):
         hidden_dims: Sequence[int],
         activation: str,
         exploration_std: float,
+        output_init_scale: float = 0.1,
     ) -> None:
         super().__init__()
         act = resolve_activation(activation)
-        self.mean_net = build_mlp(obs_dim, hidden_dims, act_dim, act, output_scale=0.01)
+        self.mean_net = build_mlp(obs_dim, hidden_dims, act_dim, act, output_scale=output_init_scale)
         self.register_buffer("exploration_std", torch.full((act_dim,), exploration_std))
 
     def set_exploration_std(self, std: float) -> None:
@@ -87,6 +88,7 @@ class TemporalStudentPolicy(nn.Module):
         rnn_hidden_dim: int,
         hidden_dims: Sequence[int],
         activation: str,
+        output_init_scale: float = 0.1,
     ) -> None:
         super().__init__()
         if obs_dim % history_steps != 0:
@@ -103,7 +105,7 @@ class TemporalStudentPolicy(nn.Module):
             num_layers=1,
             batch_first=True,
         )
-        self.head = build_mlp(rnn_hidden_dim, hidden_dims, act_dim, act, output_scale=0.01)
+        self.head = build_mlp(rnn_hidden_dim, hidden_dims, act_dim, act, output_scale=output_init_scale)
 
     def _encode(self, obs: torch.Tensor) -> torch.Tensor:
         seq = obs.view(-1, self.history_steps, self.frame_dim)
