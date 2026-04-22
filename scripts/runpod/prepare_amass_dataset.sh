@@ -13,6 +13,7 @@ AMASS_SUBSETS="${AMASS_SUBSETS:-ACCAD BMLmovi BMLrub CMU EKUT EyesJapanDataset H
 OP3_SPARSE_FILTER_ENABLED="${OP3_SPARSE_FILTER_ENABLED:-1}"
 OP3_KEEP_UNFILTERED_MERGE="${OP3_KEEP_UNFILTERED_MERGE:-0}"
 OP3_SPARSE_FILTER_ARGS="${OP3_SPARSE_FILTER_ARGS:-}"
+OP3_AMASS_PRE_FILTER_ENABLED="${OP3_AMASS_PRE_FILTER_ENABLED:-0}"
 
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 ISAACLAB_ROOT="$(resolve_isaaclab_root)"
@@ -22,17 +23,27 @@ mkdir -p "${PROCESSED_ROOT}"
 
 read -r -a AMASS_SUBSET_ARRAY <<< "${AMASS_SUBSETS}"
 
+AMASS_TEMP_DATASET_PATH="${AMASS_DATASET_PATH%.npz}_tmp.npz"
+rm -f "${AMASS_TEMP_DATASET_PATH}"
+
+AMASS_PREP_ARGS=()
+if [[ "${OP3_AMASS_PRE_FILTER_ENABLED}" != "1" ]]; then
+  AMASS_PREP_ARGS+=(--disable-feasibility-filter)
+fi
+
 "${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/prepare_amass_sparse.py" \
   --amass-root "${AMASS_ROOT}" \
   --smpl-model-root "${SMPL_MODEL_ROOT}" \
-  --output "${AMASS_DATASET_PATH}" \
+  --output "${AMASS_TEMP_DATASET_PATH}" \
   --subsets "${AMASS_SUBSET_ARRAY[@]}" \
+  "${AMASS_PREP_ARGS[@]}" \
   "$@"
 
-if [[ ! -f "${AMASS_DATASET_PATH}" ]]; then
-  echo "AMASS sparse dataset was not created: ${AMASS_DATASET_PATH}" >&2
+if [[ ! -f "${AMASS_TEMP_DATASET_PATH}" ]]; then
+  echo "AMASS sparse dataset was not created: ${AMASS_TEMP_DATASET_PATH}" >&2
   exit 1
 fi
+mv -f "${AMASS_TEMP_DATASET_PATH}" "${AMASS_DATASET_PATH}"
 
 MERGE_INPUTS=("${AMASS_DATASET_PATH}")
 if [[ -f "${AIST_DATASET_PATH}" ]]; then
