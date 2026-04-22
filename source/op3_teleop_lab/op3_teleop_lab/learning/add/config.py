@@ -25,9 +25,9 @@ class ADDTrainingConfig:
     student_output_init_scale: float = 0.1
     action_bound: float = 1.0
     sample_action_bound: float = 1.0
-    action_l2_reward_weight: float = 0.02
-    teacher_exploration_std: float = 0.6
-    teacher_exploration_final_std: float = 0.15
+    action_l2_reward_weight: float = 0.08
+    teacher_exploration_std: float = 0.3
+    teacher_exploration_final_std: float = 0.08
     teacher_exploration_decay_iterations: int = 30000
     student_rnn_hidden_dim: int = 256
 

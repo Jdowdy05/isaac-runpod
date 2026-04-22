@@ -57,7 +57,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     action_clip = 1.0
     joint_vel_scale = 0.05
     root_lin_acc_scale = 0.05
-    action_rate_weight = 0.02
+    action_rate_weight = 0.08
     energy_weight = 2.0e-4
     pose_pos_weight = 1.75
     pose_rot_weight = 0.4
