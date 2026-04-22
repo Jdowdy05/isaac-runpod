@@ -63,6 +63,8 @@ class ADDTrainer:
             activation=config.activation,
             exploration_std=config.teacher_exploration_std,
             output_init_scale=config.teacher_output_init_scale,
+            action_bound=config.action_bound,
+            sample_action_bound=config.sample_action_bound,
         ).to(device)
         self.student_policy = TemporalStudentPolicy(
             obs_dim=obs_dim,
@@ -72,6 +74,7 @@ class ADDTrainer:
             hidden_dims=config.student_hidden_dims,
             activation=config.activation,
             output_init_scale=config.student_output_init_scale,
+            action_bound=config.action_bound,
         ).to(device)
         self.value = ValueNetwork(
             obs_dim=self.critic_obs_dim,
@@ -208,7 +211,12 @@ class ADDTrainer:
         with torch.no_grad():
             disc_rewards = self.compute_disc_rewards(flat_diffs).view(self.cfg.rollout_steps, self.env.num_envs)
 
-        rewards = self.cfg.task_reward_weight * self.rollout_buffer.task_rewards + self.cfg.disc_reward_weight * disc_rewards
+        action_l2_penalty = torch.sum(self.rollout_buffer.actions.square(), dim=-1)
+        rewards = (
+            self.cfg.task_reward_weight * self.rollout_buffer.task_rewards
+            + self.cfg.disc_reward_weight * disc_rewards
+            - self.cfg.action_l2_reward_weight * action_l2_penalty
+        )
         self.rollout_buffer.compute_returns_and_advantages(
             rewards=rewards,
             next_values=next_values,

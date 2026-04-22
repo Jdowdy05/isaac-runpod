@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +86,10 @@ SEGMENTS = (
 )
 SEGMENT_INDEX = {name: idx for idx, name in enumerate(SEGMENTS)}
 OP3_TARGET_BODY_SCALE_M = 0.51
+OP3_HIP_TO_KNEE_M = 0.11
+OP3_KNEE_TO_ANKLE_M = 0.075
+OP3_ANKLE_TO_FOOT_M = 0.03
+OP3_SHOULDER_TO_HAND_M = 0.22
 
 
 @dataclass(frozen=True)
@@ -100,8 +105,15 @@ class MotionFilterConfig:
     max_pelvis_height: float
     max_torso_lean_deg: float
     max_foot_clearance: float
+    max_support_foot_clearance: float
     max_hand_reach: float
     max_feet_separation_xy: float
+    min_knee_height: float
+    max_knee_height: float
+    max_hip_to_knee: float
+    max_knee_to_ankle: float
+    max_ankle_to_foot: float
+    max_shoulder_to_hand: float
     contact_height_threshold: float
     contact_speed_threshold: float
 
@@ -128,12 +140,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-root-speed", type=float, default=0.45)
     parser.add_argument("--max-root-yaw-rate", type=float, default=2.5)
     parser.add_argument("--max-root-jerk", type=float, default=35.0)
-    parser.add_argument("--min-pelvis-height", type=float, default=0.17)
-    parser.add_argument("--max-pelvis-height", type=float, default=0.36)
-    parser.add_argument("--max-torso-lean-deg", type=float, default=45.0)
-    parser.add_argument("--max-foot-clearance", type=float, default=0.16)
+    parser.add_argument("--min-pelvis-height", type=float, default=0.22)
+    parser.add_argument("--max-pelvis-height", type=float, default=0.34)
+    parser.add_argument("--max-torso-lean-deg", type=float, default=35.0)
+    parser.add_argument("--max-foot-clearance", type=float, default=0.055)
+    parser.add_argument("--max-support-foot-clearance", type=float, default=0.035)
     parser.add_argument("--max-hand-reach", type=float, default=0.24)
     parser.add_argument("--max-feet-separation-xy", type=float, default=0.32)
+    parser.add_argument("--min-knee-height", type=float, default=0.07)
+    parser.add_argument("--max-knee-height", type=float, default=0.22)
+    parser.add_argument("--max-hip-to-knee", type=float, default=OP3_HIP_TO_KNEE_M + 0.05)
+    parser.add_argument("--max-knee-to-ankle", type=float, default=OP3_KNEE_TO_ANKLE_M + 0.055)
+    parser.add_argument("--max-ankle-to-foot", type=float, default=OP3_ANKLE_TO_FOOT_M + 0.025)
+    parser.add_argument("--max-shoulder-to-hand", type=float, default=OP3_SHOULDER_TO_HAND_M + 0.05)
     parser.add_argument("--contact-height-threshold", type=float, default=0.025)
     parser.add_argument("--contact-speed-threshold", type=float, default=0.18)
     return parser.parse_args()
@@ -268,8 +287,15 @@ def build_filter_config(args: argparse.Namespace, effective_fps: float) -> Motio
         max_pelvis_height=float(args.max_pelvis_height),
         max_torso_lean_deg=float(args.max_torso_lean_deg),
         max_foot_clearance=float(args.max_foot_clearance),
+        max_support_foot_clearance=float(args.max_support_foot_clearance),
         max_hand_reach=float(args.max_hand_reach),
         max_feet_separation_xy=float(args.max_feet_separation_xy),
+        min_knee_height=float(args.min_knee_height),
+        max_knee_height=float(args.max_knee_height),
+        max_hip_to_knee=float(args.max_hip_to_knee),
+        max_knee_to_ankle=float(args.max_knee_to_ankle),
+        max_ankle_to_foot=float(args.max_ankle_to_foot),
+        max_shoulder_to_hand=float(args.max_shoulder_to_hand),
         contact_height_threshold=float(args.contact_height_threshold),
         contact_speed_threshold=float(args.contact_speed_threshold),
     )
@@ -317,6 +343,10 @@ def filter_motion_clips(
     pelvis = scaled_joints[:, SMPLH_BODY_JOINTS["pelvis"]]
     left_hip = scaled_joints[:, SMPLH_BODY_JOINTS["left_hip"]]
     right_hip = scaled_joints[:, SMPLH_BODY_JOINTS["right_hip"]]
+    left_knee = scaled_joints[:, SMPLH_BODY_JOINTS["left_knee"]]
+    right_knee = scaled_joints[:, SMPLH_BODY_JOINTS["right_knee"]]
+    left_ankle = scaled_joints[:, SMPLH_BODY_JOINTS["left_ankle"]]
+    right_ankle = scaled_joints[:, SMPLH_BODY_JOINTS["right_ankle"]]
     left_shoulder = scaled_joints[:, SMPLH_BODY_JOINTS["left_shoulder"]]
     right_shoulder = scaled_joints[:, SMPLH_BODY_JOINTS["right_shoulder"]]
     shoulder_center = 0.5 * (left_shoulder + right_shoulder)
@@ -369,11 +399,26 @@ def filter_motion_clips(
 
     pelvis_height = pelvis[:, 2] - ground_height
     foot_clearance = np.maximum(left_foot[:, 2], right_foot[:, 2]) - ground_height
+    support_foot_clearance = np.minimum(left_foot[:, 2], right_foot[:, 2]) - ground_height
+    min_knee_height = np.minimum(left_knee[:, 2], right_knee[:, 2]) - ground_height
+    max_knee_height = np.maximum(left_knee[:, 2], right_knee[:, 2]) - ground_height
     hand_reach = np.maximum(
         np.linalg.norm(left_wrist - left_shoulder, axis=-1),
         np.linalg.norm(right_wrist - right_shoulder, axis=-1),
     )
     feet_separation_xy = np.linalg.norm(left_foot[:, :2] - right_foot[:, :2], axis=-1)
+    hip_to_knee = np.maximum(
+        np.linalg.norm(left_knee - left_hip, axis=-1),
+        np.linalg.norm(right_knee - right_hip, axis=-1),
+    )
+    knee_to_ankle = np.maximum(
+        np.linalg.norm(left_ankle - left_knee, axis=-1),
+        np.linalg.norm(right_ankle - right_knee, axis=-1),
+    )
+    ankle_to_foot = np.maximum(
+        np.linalg.norm(left_foot - left_ankle, axis=-1),
+        np.linalg.norm(right_foot - right_ankle, axis=-1),
+    )
 
     kept_clips: list[tuple[int, int]] = []
     rejection_counts: Counter[str] = Counter()
@@ -400,10 +445,24 @@ def filter_motion_clips(
             reasons.append("torso_lean")
         if float(np.max(foot_clearance[clip])) > cfg.max_foot_clearance:
             reasons.append("foot_clearance")
+        if float(np.max(support_foot_clearance[clip])) > cfg.max_support_foot_clearance:
+            reasons.append("support_foot_float")
         if float(np.max(hand_reach[clip])) > cfg.max_hand_reach:
             reasons.append("hand_reach")
         if float(np.max(feet_separation_xy[clip])) > cfg.max_feet_separation_xy:
             reasons.append("feet_separation")
+        if float(np.min(min_knee_height[clip])) < cfg.min_knee_height:
+            reasons.append("knee_too_low")
+        if float(np.max(max_knee_height[clip])) > cfg.max_knee_height:
+            reasons.append("knee_too_high")
+        if float(np.max(hip_to_knee[clip])) > cfg.max_hip_to_knee:
+            reasons.append("hip_to_knee")
+        if float(np.max(knee_to_ankle[clip])) > cfg.max_knee_to_ankle:
+            reasons.append("knee_to_ankle")
+        if float(np.max(ankle_to_foot[clip])) > cfg.max_ankle_to_foot:
+            reasons.append("ankle_to_foot")
+        if float(np.max(hand_reach[clip])) > cfg.max_shoulder_to_hand:
+            reasons.append("shoulder_to_hand")
         if float(np.mean(contact_any[clip])) < cfg.min_contact_ratio:
             reasons.append("contact_ratio")
         if float(np.mean(double_air[clip])) > cfg.max_double_air_ratio:
@@ -661,6 +720,7 @@ def main() -> None:
     rejected_clips = 0
     kept_clips = 0
     rejection_reasons: Counter[str] = Counter()
+    filter_cfg_for_metadata = build_filter_config(args, args.target_fps) if not args.disable_feasibility_filter else None
 
     motion_paths = iter_motion_files(args.amass_root, args.subsets)
     if args.limit is not None:
@@ -765,6 +825,10 @@ def main() -> None:
         segment_names=np.asarray(SEGMENTS),
         source=np.asarray(sources, dtype=str),
         effective_fps=float(args.target_fps),
+        op3_filter_config=np.asarray(
+            [json.dumps(asdict(filter_cfg_for_metadata), sort_keys=True)] if filter_cfg_for_metadata else [],
+            dtype=str,
+        ),
     )
     print(f"Wrote AMASS sparse dataset to: {args.output}")
     print(f"Sequences: {len(sequence_lengths)}")

@@ -54,6 +54,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     actor_history_steps = ACTOR_HISTORY_STEPS
 
     action_scale = 0.45
+    action_clip = 1.0
     joint_vel_scale = 0.05
     root_lin_acc_scale = 0.05
     action_rate_weight = 0.02

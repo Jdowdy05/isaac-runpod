@@ -434,7 +434,8 @@ class OP3TeleopEnv(DirectRLEnv):
             self._torque_curriculum_step += 1
             self._apply_torque_limit_curriculum()
         self.prev_actions.copy_(self.actions)
-        self.actions = actions.clone()
+        action_clip = float(getattr(self.cfg, "action_clip", 1.0))
+        self.actions = torch.clamp(actions, -action_clip, action_clip)
         unclipped_targets = self._default_joint_pos + self.cfg.action_scale * self.actions
         self.position_targets = torch.clamp(unclipped_targets, self._joint_lower, self._joint_upper)
 

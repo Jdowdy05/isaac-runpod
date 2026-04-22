@@ -10,6 +10,9 @@ AIST_DATASET_PATH="${AIST_DATASET_PATH:-${PROCESSED_ROOT}/aist_sparse_pose.npz}"
 AMASS_DATASET_PATH="${AMASS_DATASET_PATH:-${PROCESSED_ROOT}/amass_sparse_pose.npz}"
 COMBINED_DATASET_PATH="${COMBINED_DATASET_PATH:-${PROCESSED_ROOT}/teleop_sparse_pose.npz}"
 AMASS_SUBSETS="${AMASS_SUBSETS:-ACCAD BMLmovi BMLrub CMU EKUT EyesJapanDataset HDM05 HumanEva KIT TotalCapture Transitions DanceDB}"
+OP3_SPARSE_FILTER_ENABLED="${OP3_SPARSE_FILTER_ENABLED:-1}"
+OP3_KEEP_UNFILTERED_MERGE="${OP3_KEEP_UNFILTERED_MERGE:-0}"
+OP3_SPARSE_FILTER_ARGS="${OP3_SPARSE_FILTER_ARGS:-}"
 
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 ISAACLAB_ROOT="$(resolve_isaaclab_root)"
@@ -36,9 +39,25 @@ if [[ -f "${AIST_DATASET_PATH}" ]]; then
   MERGE_INPUTS=("${AIST_DATASET_PATH}" "${AMASS_DATASET_PATH}")
 fi
 
+MERGE_OUTPUT_PATH="${COMBINED_DATASET_PATH}"
+if [[ "${OP3_SPARSE_FILTER_ENABLED}" != "0" ]]; then
+  MERGE_OUTPUT_PATH="${COMBINED_DATASET_PATH%.npz}_unfiltered_merge.npz"
+fi
+
 "${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/merge_sparse_datasets.py" \
   --inputs "${MERGE_INPUTS[@]}" \
-  --output "${COMBINED_DATASET_PATH}"
+  --output "${MERGE_OUTPUT_PATH}"
+
+if [[ "${OP3_SPARSE_FILTER_ENABLED}" != "0" ]]; then
+  read -r -a OP3_SPARSE_FILTER_ARG_ARRAY <<< "${OP3_SPARSE_FILTER_ARGS}"
+  "${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/filter_sparse_pose_dataset.py" \
+    --input "${MERGE_OUTPUT_PATH}" \
+    --output "${COMBINED_DATASET_PATH}" \
+    "${OP3_SPARSE_FILTER_ARG_ARRAY[@]}"
+  if [[ "${OP3_KEEP_UNFILTERED_MERGE}" != "1" ]]; then
+    rm -f "${MERGE_OUTPUT_PATH}"
+  fi
+fi
 
 echo
 echo "AMASS preprocessing complete."

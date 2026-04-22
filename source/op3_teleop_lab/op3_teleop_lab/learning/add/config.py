@@ -23,9 +23,12 @@ class ADDTrainingConfig:
     activation: str = "relu"
     teacher_output_init_scale: float = 0.1
     student_output_init_scale: float = 0.1
-    teacher_exploration_std: float = 1.5
-    teacher_exploration_final_std: float = 0.25
-    teacher_exploration_decay_iterations: int = 50000
+    action_bound: float = 1.0
+    sample_action_bound: float = 1.0
+    action_l2_reward_weight: float = 0.02
+    teacher_exploration_std: float = 0.6
+    teacher_exploration_final_std: float = 0.15
+    teacher_exploration_decay_iterations: int = 30000
     student_rnn_hidden_dim: int = 256
 
     rollout_steps: int = 32
@@ -99,6 +102,9 @@ class ADDTrainingConfig:
             "activation",
             "teacher_output_init_scale",
             "student_output_init_scale",
+            "action_bound",
+            "sample_action_bound",
+            "action_l2_reward_weight",
             "teacher_exploration_std",
             "teacher_exploration_final_std",
             "teacher_exploration_decay_iterations",

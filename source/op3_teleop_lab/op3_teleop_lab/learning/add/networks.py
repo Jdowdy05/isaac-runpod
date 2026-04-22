@@ -49,17 +49,21 @@ class DeterministicTeacherPolicy(nn.Module):
         activation: str,
         exploration_std: float,
         output_init_scale: float = 0.1,
+        action_bound: float = 1.0,
+        sample_action_bound: float | None = 1.0,
     ) -> None:
         super().__init__()
         act = resolve_activation(activation)
         self.mean_net = build_mlp(obs_dim, hidden_dims, act_dim, act, output_scale=output_init_scale)
         self.register_buffer("exploration_std", torch.full((act_dim,), exploration_std))
+        self.action_bound = float(action_bound)
+        self.sample_action_bound = float(sample_action_bound) if sample_action_bound is not None else None
 
     def set_exploration_std(self, std: float) -> None:
         self.exploration_std.fill_(float(std))
 
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.mean_net(obs)
+        return self.action_bound * torch.tanh(self.mean_net(obs))
 
     def distribution(self, obs: torch.Tensor) -> Normal:
         mean = self.deterministic(obs)
@@ -69,6 +73,8 @@ class DeterministicTeacherPolicy(nn.Module):
     def sample(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
         action = dist.rsample()
+        if self.sample_action_bound is not None:
+            action = torch.clamp(action, -self.sample_action_bound, self.sample_action_bound)
         log_prob = dist.log_prob(action).sum(dim=-1)
         return action, log_prob
 
@@ -89,6 +95,7 @@ class TemporalStudentPolicy(nn.Module):
         hidden_dims: Sequence[int],
         activation: str,
         output_init_scale: float = 0.1,
+        action_bound: float = 1.0,
     ) -> None:
         super().__init__()
         if obs_dim % history_steps != 0:
@@ -99,6 +106,7 @@ class TemporalStudentPolicy(nn.Module):
         act = resolve_activation(activation)
         self.history_steps = history_steps
         self.frame_dim = obs_dim // history_steps
+        self.action_bound = float(action_bound)
         self.gru = nn.GRU(
             input_size=self.frame_dim,
             hidden_size=rnn_hidden_dim,
@@ -114,7 +122,7 @@ class TemporalStudentPolicy(nn.Module):
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         features = self._encode(obs)
-        return self.head(features)
+        return self.action_bound * torch.tanh(self.head(features))
 
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
         return self.forward(obs)

@@ -7,9 +7,12 @@ disc_hidden_dims: [1024, 512]
 activation: relu
 teacher_output_init_scale: 0.1
 student_output_init_scale: 0.1
-teacher_exploration_std: 1.5
-teacher_exploration_final_std: 0.25
-teacher_exploration_decay_iterations: 50000
+action_bound: 1.0
+sample_action_bound: 1.0
+action_l2_reward_weight: 0.02
+teacher_exploration_std: 0.6
+teacher_exploration_final_std: 0.15
+teacher_exploration_decay_iterations: 30000
 student_rnn_hidden_dim: 256
 
 rollout_steps: 32
