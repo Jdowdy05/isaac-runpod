@@ -39,6 +39,55 @@ pip-wheel-metadata/
 # Local environment files
 .env
 .env.*
+*.env
+*.env.*
+*.local
+*.local.*
+
+# Credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*_token*
+*_secret*
+*credentials*
+*secrets*
+
+# Local agent/Codex workspace memory and generated skills
+docs/agent-context/
+docs/agent-skills/
+tmp/
+
+# Local paper workspace and LaTeX build artifacts
+IEEE___Full_Body_TeleOP3/
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.xdv
+
+# Local papers, archives, and large binary bundles
+*.pdf
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
 
 # Isaac / Omniverse caches and generated content
 *.kitlog
