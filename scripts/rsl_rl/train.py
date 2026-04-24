@@ -63,6 +63,7 @@ def main() -> None:
     bootstrap = (
         "import runpy, sys; "
         "import op3_teleop_lab.tasks; "
+        f"sys.path.insert(0, {str(train_script.parent)!r}); "
         f"sys.argv[0] = {str(train_script)!r}; "
         f"runpy.run_path({str(train_script)!r}, run_name='__main__')"
     )
