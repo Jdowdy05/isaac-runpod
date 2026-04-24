@@ -17,8 +17,11 @@ def find_isaaclab_root() -> Path:
     candidates.extend(
         (
             Path("/workspace/IsaacLab"),
+            Path("/workspace/isaaclab"),
             Path(__file__).resolve().parents[2] / "IsaacLab",
+            Path(__file__).resolve().parents[2] / "isaaclab",
             Path.cwd() / "IsaacLab",
+            Path.cwd() / "isaaclab",
         )
     )
     for candidate in candidates:

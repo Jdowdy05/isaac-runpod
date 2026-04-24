@@ -9,6 +9,7 @@ fi
 NUM_ENVS="${NUM_ENVS:-2048}"
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 ISAACLAB_ROOT="$(resolve_isaaclab_root)"
+export ISAACLAB_ROOT
 
 if [[ -n "${OP3_TELEOP_MODE:-}" ]]; then
   TELEOP_MODE="${OP3_TELEOP_MODE}"
