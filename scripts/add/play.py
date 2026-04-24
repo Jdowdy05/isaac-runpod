@@ -48,6 +48,39 @@ def _format_action_stats(action_names: list[str], actions) -> str:
     return ", ".join(f"{name}={value:+.4f}" for name, value in zip(action_names, first_env_actions, strict=True))
 
 
+def _format_joint_target_debug(base_env, action_names: list[str], actions) -> str:
+    import torch
+
+    current_joint_pos = base_env._select_joint_columns(base_env.robot.data.joint_pos)[0].detach().cpu()
+    default_joint_pos = base_env._default_joint_pos[0].detach().cpu()
+    joint_lower = base_env._joint_lower.detach().cpu()
+    joint_upper = base_env._joint_upper.detach().cpu()
+    clipped_actions = torch.clamp(
+        actions[0].detach().cpu(),
+        -float(getattr(base_env.cfg, "action_clip", 1.0)),
+        float(getattr(base_env.cfg, "action_clip", 1.0)),
+    )
+    target_joint_pos = torch.clamp(default_joint_pos + float(base_env.cfg.action_scale) * clipped_actions, joint_lower, joint_upper)
+    target_error = (target_joint_pos - current_joint_pos).abs()
+    joint_from_default = (current_joint_pos - default_joint_pos).abs()
+    top_k = min(4, target_error.numel())
+    top_indices = torch.topk(target_error, k=top_k).indices.tolist()
+    top_joint_errors = ", ".join(
+        (
+            f"{action_names[idx]} cur={current_joint_pos[idx]:+.3f} "
+            f"tgt={target_joint_pos[idx]:+.3f} err={target_error[idx]:.3f}"
+        )
+        for idx in top_indices
+    )
+    return (
+        f"target_abs_mean={target_joint_pos.abs().mean().item():.6f} "
+        f"target_error_abs_mean={target_error.mean().item():.6f} "
+        f"target_error_abs_max={target_error.max().item():.6f} "
+        f"joint_from_default_abs_mean={joint_from_default.mean().item():.6f} | "
+        f"{top_joint_errors}"
+    )
+
+
 def main() -> None:
     parser = build_arg_parser()
     try:
@@ -174,6 +207,7 @@ def main() -> None:
                     f"action_abs_max={action_abs.max().item():.6f}"
                 )
                 print(f"[play step {step}] actions_env0: {_format_action_stats(action_names, actions)}")
+                print(f"[play step {step}] target_debug_env0: {_format_joint_target_debug(base_env, action_names, actions)}")
 
             obs_dict, _, _, _, _ = env.step(actions)
             actor_obs = obs_dict["policy"]
