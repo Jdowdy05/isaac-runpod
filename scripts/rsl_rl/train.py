@@ -43,18 +43,30 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 
 def main() -> None:
     args, passthrough = parse_args()
+    project_root = Path(__file__).resolve().parents[2]
     isaaclab_root = find_isaaclab_root()
     train_script = isaaclab_root / "scripts" / "reinforcement_learning" / "rsl_rl" / "train.py"
     if not train_script.exists():
         raise FileNotFoundError(f"Could not find Isaac Lab RSL-RL train script: {train_script}")
 
     env = os.environ.copy()
+    project_pythonpath = str(project_root / "source" / "op3_teleop_lab")
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        f"{project_pythonpath}:{existing_pythonpath}" if existing_pythonpath else project_pythonpath
+    )
     if args.teleop_mode:
         env["OP3_TELEOP_MODE"] = args.teleop_mode
     if args.teleop_dataset_path:
         env["OP3_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
 
-    cmd = [sys.executable, str(train_script), "--task", args.task]
+    bootstrap = (
+        "import runpy, sys; "
+        "import op3_teleop_lab.tasks; "
+        f"sys.argv[0] = {str(train_script)!r}; "
+        f"runpy.run_path({str(train_script)!r}, run_name='__main__')"
+    )
+    cmd = [sys.executable, "-c", bootstrap, "--task", args.task]
     if args.headless:
         cmd.append("--headless")
     if args.num_envs is not None:
