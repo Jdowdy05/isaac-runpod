@@ -11,7 +11,7 @@ action_l2_reward_weight: 0.02
 teacher_exploration_std: 0.3
 teacher_exploration_final_std: 0.08
 teacher_exploration_decay_iterations: 30000
-teacher_uses_critic_obs: false
+teacher_uses_critic_obs: true
 student_rnn_hidden_dim: 256
 
 rollout_steps: 32

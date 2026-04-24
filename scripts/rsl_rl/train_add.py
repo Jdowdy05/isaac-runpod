@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import random
 from datetime import datetime
+from importlib import metadata
 from pathlib import Path
 
 
@@ -47,7 +48,7 @@ def main() -> None:
     import gymnasium as gym
     import numpy as np
     import torch
-    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
 
     import op3_teleop_lab.tasks  # noqa: F401
     from op3_teleop_lab.learning.add.config import ADDTrainingConfig
@@ -70,6 +71,7 @@ def main() -> None:
         agent_cfg.device = args.device
     if args.max_iterations is not None:
         agent_cfg.max_iterations = args.max_iterations
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
 
     add_cfg = ADDTrainingConfig.from_yaml(args.add_config)
     if args.max_iterations is not None:
