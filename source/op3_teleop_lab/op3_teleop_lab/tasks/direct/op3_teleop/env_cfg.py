@@ -12,13 +12,13 @@ from isaaclab.utils import configclass
 from op3_teleop_lab.assets.op3 import resolve_op3_cfg
 from op3_teleop_lab.utils.physics import build_sim_cfg
 
-from .constants import SPARSE_POSE_DIM
+from .constants import POSITION_CENTRIC_COMMAND_DIM
 from .robot_profile import get_action_joint_names, make_default_op3_profile
 
 PHYSICS_DT = 0.002
 POLICY_CONTROL_HZ = 50.0
 POLICY_DECIMATION = int(round(1.0 / (POLICY_CONTROL_HZ * PHYSICS_DT)))
-ACTOR_HISTORY_STEPS = 10
+ACTOR_HISTORY_STEPS = 25
 CONTACT_GROUP_COUNT = 6
 CONTACT_SENSOR_BODY_REGEX = "l_el_link|r_el_link|l_knee_link|r_knee_link|l_ank_roll_link|r_ank_roll_link"
 
@@ -31,7 +31,7 @@ def compute_actor_frame_dim(action_dim: int) -> int:
         + action_dim
         + action_dim
         + action_dim
-        + SPARSE_POSE_DIM
+        + POSITION_CENTRIC_COMMAND_DIM
     )
 
 

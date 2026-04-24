@@ -15,14 +15,16 @@ class OP3TeleopPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=0.35,
         noise_std_type="scalar",
-        actor_obs_normalization=True,
-        critic_obs_normalization=True,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
+        # Leave Isaac Lab empirical observation normalization disabled for this teleop stack
+        # unless it has been explicitly revalidated for convergence on OP3.
+        actor_obs_normalization=False,
+        critic_obs_normalization=False,
+        actor_hidden_dims=[512, 512, 128],
+        critic_hidden_dims=[512, 512, 128],
         activation="elu",
     )
     algorithm = RslRlPpoAlgorithmCfg(
-        value_loss_coef=1.0,
+        value_loss_coef=0.5,
         use_clipped_value_loss=True,
         clip_param=0.2,
         entropy_coef=0.005,
@@ -32,6 +34,6 @@ class OP3TeleopPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
-        desired_kl=0.008,
+        desired_kl=0.01,
         max_grad_norm=1.0,
     )

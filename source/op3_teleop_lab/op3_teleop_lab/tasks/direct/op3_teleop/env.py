@@ -7,7 +7,7 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor
 
-from .constants import SEGMENT_INDEX, SPARSE_POSE_DIM, TRACKED_SEGMENTS
+from .constants import SEGMENT_INDEX, TRACKED_SEGMENTS
 from .env_cfg import OP3TeleopEnvCfg, compute_actor_frame_dim
 from .robot_profile import get_action_joint_names
 from .teleop_command import SparsePoseBatch, SparsePoseCommandGenerator, quat_from_euler_xyz
@@ -426,17 +426,44 @@ class OP3TeleopEnv(DirectRLEnv):
         root_ang_vel = self._as_torch(self.robot.data.root_ang_vel_b)
         projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
         root_lin_acc_b = self._get_root_linear_acceleration_b()
-        joint_pos_scaled = self._scale_joint_pos(joint_pos)
-        sparse_pose = self.teleop_command.flatten()
+        position_command = self._build_position_command_features()
         return torch.cat(
             (
                 root_ang_vel,
                 projected_gravity,
                 root_lin_acc_b * self.cfg.root_lin_acc_scale,
-                joint_pos_scaled,
+                joint_pos,
                 joint_vel * self.cfg.joint_vel_scale,
                 self.prev_actions,
-                sparse_pose,
+                position_command,
+            ),
+            dim=-1,
+        )
+
+    def _build_position_command_features(self) -> torch.Tensor:
+        root_pos = self._as_torch(self.robot.data.root_pos_w)
+        root_quat = quat_normalize(self._as_torch(self.robot.data.root_quat_w))
+        root_quat_inv = quat_conjugate(root_quat)
+        body_pos_w = self._as_torch(self.robot.data.body_pos_w)
+
+        current_pos_rel = []
+        for segment_name in TRACKED_SEGMENTS:
+            if segment_name == "pelvis":
+                current_pos_rel.append(torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device))
+                continue
+            body_id = self._body_ids[segment_name]
+            current_pos_rel.append(quat_apply(root_quat_inv, body_pos_w[:, body_id] - root_pos))
+
+        current_pos_rel = torch.stack(current_pos_rel, dim=1)
+        pos_valid = self.teleop_command.position_valid.unsqueeze(-1).float()
+        target_positions = self.teleop_command.positions * pos_valid
+        pos_diff = (self.teleop_command.positions - current_pos_rel) * pos_valid
+        pos_valid_flat = self.teleop_command.position_valid.float().reshape(self.num_envs, -1)
+        return torch.cat(
+            (
+                pos_diff.reshape(self.num_envs, -1),
+                target_positions.reshape(self.num_envs, -1),
+                pos_valid_flat,
             ),
             dim=-1,
         )
