@@ -53,7 +53,7 @@ class ADDTrainingConfig:
     disc_replay_capacity: int = 200000
     disc_replay_samples: int = 1000
 
-    task_reward_weight: float = 0.0
+    task_reward_weight: float = 0.05
     disc_reward_weight: float = 1.0
     student_bc_weight: float = 1.0
 

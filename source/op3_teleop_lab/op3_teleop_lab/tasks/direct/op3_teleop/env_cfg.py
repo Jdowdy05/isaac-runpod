@@ -20,11 +20,13 @@ POLICY_CONTROL_HZ = 50.0
 POLICY_DECIMATION = int(round(1.0 / (POLICY_CONTROL_HZ * PHYSICS_DT)))
 ACTOR_HISTORY_STEPS = 10
 CONTACT_GROUP_COUNT = 6
+COMMAND_VEL_DIM = 2
+PHASE_DIM = 2
 CONTACT_SENSOR_BODY_REGEX = "l_el_link|r_el_link|l_knee_link|r_knee_link|l_ank_roll_link|r_ank_roll_link"
 
 
 def compute_actor_frame_dim(action_dim: int) -> int:
-    return 3 + 3 + 3 + action_dim + action_dim + action_dim + SPARSE_POSE_DIM + 2
+    return 3 + 3 + 3 + action_dim + action_dim + action_dim + SPARSE_POSE_DIM + COMMAND_VEL_DIM + PHASE_DIM
 
 
 def compute_actor_obs_dim(action_dim: int, history_steps: int) -> int:

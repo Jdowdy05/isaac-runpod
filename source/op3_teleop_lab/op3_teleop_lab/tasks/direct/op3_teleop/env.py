@@ -8,7 +8,7 @@ from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor
 
 from .constants import SEGMENT_INDEX, SPARSE_POSE_DIM, TRACKED_SEGMENTS
-from .env_cfg import OP3TeleopEnvCfg
+from .env_cfg import OP3TeleopEnvCfg, compute_actor_frame_dim
 from .robot_profile import get_action_joint_names
 from .teleop_command import SparsePoseBatch, SparsePoseCommandGenerator, quat_from_euler_xyz
 
@@ -134,7 +134,7 @@ class OP3TeleopEnv(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.actions)
         self.position_targets = self._default_joint_pos.clone()
         self.fixed_position_targets = self._default_fixed_joint_pos.clone()
-        self._actor_frame_dim = 3 + 3 + 3 + len(self._joint_ids) + len(self._joint_ids) + len(self._joint_ids) + SPARSE_POSE_DIM + 2
+        self._actor_frame_dim = compute_actor_frame_dim(len(self._joint_ids))
         self._actor_history = torch.zeros(
             self.num_envs,
             self.cfg.actor_history_steps,
@@ -151,6 +151,8 @@ class OP3TeleopEnv(DirectRLEnv):
             dataset_path=self.cfg.teleop_dataset_path,
         )
         self.teleop_command = self.command_generator.step()
+        self._last_add_diff = self._compute_add_differential().clone()
+        self._have_valid_transition_add_diff = False
         if self._torque_curriculum_enabled:
             self._apply_torque_limit_curriculum(force=True)
 
@@ -407,6 +409,7 @@ class OP3TeleopEnv(DirectRLEnv):
         root_lin_acc_b = self._get_root_linear_acceleration_b()
         joint_pos_scaled = self._scale_joint_pos(joint_pos)
         sparse_pose = self.teleop_command.flatten()
+        command_lin_vel = self.teleop_command.target_lin_vel_xy
         phase_obs = torch.stack((torch.sin(self.teleop_command.phase), torch.cos(self.teleop_command.phase)), dim=-1)
         return torch.cat(
             (
@@ -417,6 +420,7 @@ class OP3TeleopEnv(DirectRLEnv):
                 joint_vel * self.cfg.joint_vel_scale,
                 self.prev_actions,
                 sparse_pose,
+                command_lin_vel,
                 phase_obs,
             ),
             dim=-1,
@@ -445,17 +449,22 @@ class OP3TeleopEnv(DirectRLEnv):
             self.robot.set_joint_position_target(self.fixed_position_targets, joint_ids=self._fixed_joint_ids)
 
     def _get_observations(self) -> dict[str, torch.Tensor]:
-        self.teleop_command = self.command_generator.step()
-        actor_frame = self._build_actor_frame()
-        actor_obs = self._update_actor_history(actor_frame)
-        critic_obs = self._build_critic_obs(actor_obs)
         task_reward = getattr(
             self,
             "reward_buf",
             torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         )
+        transition_add_diff = self._last_add_diff.clone()
+        needs_fresh_add_diff = not self._have_valid_transition_add_diff
+        self.teleop_command = self.command_generator.step()
+        actor_frame = self._build_actor_frame()
+        actor_obs = self._update_actor_history(actor_frame)
+        critic_obs = self._build_critic_obs(actor_obs)
+        if needs_fresh_add_diff:
+            transition_add_diff = self._compute_add_differential()
+        self._have_valid_transition_add_diff = False
         self.extras = {
-            "add_diff": self._compute_add_differential(),
+            "add_diff": transition_add_diff,
             "task_reward": task_reward.clone(),
         }
         return {"policy": actor_obs, "critic": critic_obs}
@@ -520,7 +529,7 @@ class OP3TeleopEnv(DirectRLEnv):
             dim=-1,
         ).float()
 
-        return (
+        rewards = (
             self.cfg.alive_reward
             + self.cfg.pose_pos_weight * pose_pos_reward
             + self.cfg.pose_rot_weight * pose_rot_reward
@@ -533,6 +542,9 @@ class OP3TeleopEnv(DirectRLEnv):
             - self.cfg.root_acc_weight * root_acc_penalty
             - self.cfg.joint_limit_weight * joint_limit_penalty
         )
+        self._last_add_diff = self._compute_add_differential()
+        self._have_valid_transition_add_diff = True
+        return rewards
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)

@@ -57,30 +57,57 @@ class DeterministicTeacherPolicy(nn.Module):
         self.mean_net = build_mlp(obs_dim, hidden_dims, act_dim, act, output_scale=output_init_scale)
         self.register_buffer("exploration_std", torch.full((act_dim,), exploration_std))
         self.action_bound = float(action_bound)
-        self.sample_action_bound = float(sample_action_bound) if sample_action_bound is not None else None
+        self.sample_action_bound = float(sample_action_bound) if sample_action_bound is not None else self.action_bound
+        if not math.isclose(self.sample_action_bound, self.action_bound, rel_tol=1.0e-6, abs_tol=1.0e-6):
+            raise ValueError(
+                "DeterministicTeacherPolicy requires matching action_bound and sample_action_bound when using "
+                "the tanh-squashed Gaussian teacher."
+            )
 
     def set_exploration_std(self, std: float) -> None:
         self.exploration_std.fill_(float(std))
 
+    def _mean_logits(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.mean_net(obs)
+
+    def _squash(self, pre_tanh_action: torch.Tensor) -> torch.Tensor:
+        return self.action_bound * torch.tanh(pre_tanh_action)
+
+    @staticmethod
+    def _atanh(value: torch.Tensor) -> torch.Tensor:
+        return 0.5 * (torch.log1p(value) - torch.log1p(-value))
+
+    def _scaled_tanh_log_prob(
+        self,
+        dist: Normal,
+        pre_tanh_action: torch.Tensor,
+        squashed_action: torch.Tensor,
+    ) -> torch.Tensor:
+        safe_squashed = torch.clamp(1.0 - squashed_action.square(), min=1.0e-6)
+        log_det_jacobian = math.log(self.action_bound) + torch.log(safe_squashed)
+        return (dist.log_prob(pre_tanh_action) - log_det_jacobian).sum(dim=-1)
+
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.action_bound * torch.tanh(self.mean_net(obs))
+        return self._squash(self._mean_logits(obs))
 
     def distribution(self, obs: torch.Tensor) -> Normal:
-        mean = self.deterministic(obs)
-        std = self.exploration_std.unsqueeze(0).expand_as(mean)
-        return Normal(mean, std)
+        mean_logits = self._mean_logits(obs)
+        std = self.exploration_std.unsqueeze(0).expand_as(mean_logits)
+        return Normal(mean_logits, std)
 
     def sample(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
-        action = dist.rsample()
-        if self.sample_action_bound is not None:
-            action = torch.clamp(action, -self.sample_action_bound, self.sample_action_bound)
-        log_prob = dist.log_prob(action).sum(dim=-1)
+        pre_tanh_action = dist.rsample()
+        squashed_action = torch.tanh(pre_tanh_action)
+        action = self.action_bound * squashed_action
+        log_prob = self._scaled_tanh_log_prob(dist, pre_tanh_action, squashed_action)
         return action, log_prob
 
     def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
-        log_prob = dist.log_prob(actions).sum(dim=-1)
+        squashed_action = torch.clamp(actions / self.action_bound, min=-1.0 + 1.0e-6, max=1.0 - 1.0e-6)
+        pre_tanh_action = self._atanh(squashed_action)
+        log_prob = self._scaled_tanh_log_prob(dist, pre_tanh_action, squashed_action)
         entropy = dist.entropy().sum(dim=-1)
         return log_prob, entropy
 
