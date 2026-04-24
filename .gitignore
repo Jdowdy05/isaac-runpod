@@ -43,6 +43,7 @@ pip-wheel-metadata/
 *.env.*
 *.local
 *.local.*
+LOCAL_OP3_AGENT_HANDOFF.txt
 
 # Credentials and private keys
 *.pem

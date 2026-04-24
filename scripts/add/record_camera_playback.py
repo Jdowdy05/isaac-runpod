@@ -33,11 +33,11 @@ def build_arg_parser():
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=1000)
-    parser.add_argument("--use_teacher", action="store_true", help="Record the privileged teacher instead of the deployment student.")
+    parser.add_argument("--use_teacher", action="store_true", help="Record the teacher policy instead of the deployment student.")
     parser.add_argument(
         "--sample_actions",
         action="store_true",
-        help="Sample actions from the privileged teacher instead of using its deterministic mean.",
+        help="Sample actions from the teacher policy instead of using its deterministic mean.",
     )
     parser.add_argument("--print_stats_every", type=int, default=0, help="Print observation and action statistics every N steps.")
     parser.add_argument("--width", type=int, default=1280)
@@ -66,14 +66,12 @@ def _format_joint_target_debug(base_env, action_names: list[str], actions) -> st
 
     current_joint_pos = base_env._select_joint_columns(base_env.robot.data.joint_pos)[0].detach().cpu()
     default_joint_pos = base_env._default_joint_pos[0].detach().cpu()
-    joint_lower = base_env._joint_lower.detach().cpu()
-    joint_upper = base_env._joint_upper.detach().cpu()
     clipped_actions = torch.clamp(
-        actions[0].detach().cpu(),
-        -float(getattr(base_env.cfg, "action_clip", 1.0)),
-        float(getattr(base_env.cfg, "action_clip", 1.0)),
+        actions.detach(),
+        -float(getattr(base_env.cfg, "action_clip", 100.0)),
+        float(getattr(base_env.cfg, "action_clip", 100.0)),
     )
-    target_joint_pos = torch.clamp(default_joint_pos + float(base_env.cfg.action_scale) * clipped_actions, joint_lower, joint_upper)
+    target_joint_pos = base_env._actions_to_position_targets(clipped_actions)[0].detach().cpu()
     target_error = (target_joint_pos - current_joint_pos).abs()
     joint_from_default = (current_joint_pos - default_joint_pos).abs()
     top_k = min(4, target_error.numel())
@@ -162,12 +160,15 @@ def _draw_state_frame(
 ):
     from PIL import Image, ImageDraw
     import torch
+    from op3_teleop_lab.tasks.direct.op3_teleop.env import quat_apply, quat_conjugate, quat_normalize
 
     image = Image.new("RGB", (width, height), (247, 248, 245))
     draw = ImageDraw.Draw(image)
 
-    root_pos = base_env._as_torch(base_env.robot.data.root_pos_w)[0].detach().cpu()
-    body_pos_w = base_env._as_torch(base_env.robot.data.body_pos_w)[0].detach().cpu()
+    root_pos_t = base_env._as_torch(base_env.robot.data.root_pos_w)[0]
+    root_quat_inv = quat_conjugate(quat_normalize(base_env._as_torch(base_env.robot.data.root_quat_w)[0]))
+    body_pos_w_t = base_env._as_torch(base_env.robot.data.body_pos_w)[0]
+    root_pos = root_pos_t.detach().cpu()
     command_pos = base_env.teleop_command.positions[0].detach().cpu()
 
     actual = {}
@@ -178,7 +179,7 @@ def _draw_state_frame(
             actual[segment_name] = torch.zeros(3)
         else:
             body_id = base_env._body_ids[segment_name]
-            actual[segment_name] = body_pos_w[body_id] - root_pos
+            actual[segment_name] = quat_apply(root_quat_inv, body_pos_w_t[body_id] - root_pos_t).detach().cpu()
         target[segment_name] = command_pos[seg_idx]
 
     root_height = float(root_pos[2].item())
@@ -364,7 +365,7 @@ def main() -> None:
                 camera.set_world_poses_from_view(camera_position.unsqueeze(0), camera_target.unsqueeze(0))
 
             if args.use_teacher:
-                actions = trainer.teacher_actions(critic_obs, sample=args.sample_actions)
+                actions = trainer.teacher_actions(actor_obs, critic_obs, sample=args.sample_actions)
             else:
                 actions = trainer.deployment_actions(actor_obs)
 

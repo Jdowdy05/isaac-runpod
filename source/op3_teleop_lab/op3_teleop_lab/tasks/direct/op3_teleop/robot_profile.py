@@ -52,7 +52,6 @@ class OP3RobotProfile:
             "right_foot": "r_ank_roll_link",
         }
     )
-    action_scale: float = 0.45
     termination_height: float = 0.14
     max_root_tilt_cos: float = 0.55
 

@@ -48,6 +48,7 @@ class ADDTrainer:
         self.env = env
         self.actor_obs_dim = obs_dim
         self.critic_obs_dim = critic_obs_dim if critic_obs_dim is not None else obs_dim
+        self.teacher_obs_dim = self.critic_obs_dim if config.teacher_uses_critic_obs else self.actor_obs_dim
         self.action_dim = action_dim
         self.diff_dim = diff_dim
         self.cfg = config
@@ -57,14 +58,12 @@ class ADDTrainer:
 
         history_steps = int(getattr(self.env.cfg, "actor_history_steps", 1))
         self.teacher_policy = DeterministicTeacherPolicy(
-            obs_dim=self.critic_obs_dim,
+            obs_dim=self.teacher_obs_dim,
             act_dim=action_dim,
             hidden_dims=config.teacher_hidden_dims,
             activation=config.activation,
             exploration_std=config.teacher_exploration_std,
             output_init_scale=config.teacher_output_init_scale,
-            action_bound=config.action_bound,
-            sample_action_bound=config.sample_action_bound,
         ).to(device)
         self.student_policy = TemporalStudentPolicy(
             obs_dim=obs_dim,
@@ -74,7 +73,6 @@ class ADDTrainer:
             hidden_dims=config.student_hidden_dims,
             activation=config.activation,
             output_init_scale=config.student_output_init_scale,
-            action_bound=config.action_bound,
         ).to(device)
         self.value = ValueNetwork(
             obs_dim=self.critic_obs_dim,
@@ -117,6 +115,13 @@ class ADDTrainer:
 
         # Backward-compatibility alias for scripts that still reference trainer.policy.
         self.policy = self.student_policy
+
+    def _select_teacher_obs(self, actor_obs: torch.Tensor, critic_obs: torch.Tensor | None = None) -> torch.Tensor:
+        if self.cfg.teacher_uses_critic_obs:
+            if critic_obs is None:
+                raise ValueError("critic_obs is required when teacher_uses_critic_obs is enabled.")
+            return critic_obs
+        return actor_obs
 
     def _teacher_exploration_std_for_iteration(self, iteration: int) -> float:
         initial_std = float(self.cfg.teacher_exploration_std)
@@ -170,8 +175,9 @@ class ADDTrainer:
 
         for _ in range(self.cfg.rollout_steps):
             with torch.no_grad():
-                teacher_mean_actions = self.teacher_policy.deterministic(self.critic_obs)
-                actions, log_probs = self.teacher_policy.sample(self.critic_obs)
+                teacher_obs = self._select_teacher_obs(self.actor_obs, self.critic_obs)
+                teacher_mean_actions = self.teacher_policy.deterministic(teacher_obs)
+                actions, log_probs = self.teacher_policy.sample(teacher_obs)
                 values = self.value(self.critic_obs)
                 student_actions = self.student_policy.deterministic(self.actor_obs)
 
@@ -263,13 +269,15 @@ class ADDTrainer:
             permutation = torch.randperm(num_samples, device=self.device)
             for start in range(0, num_samples, minibatch_size):
                 idx = permutation[start : start + minibatch_size]
+                actor_obs = batch["actor_obs"][idx]
                 critic_obs = batch["critic_obs"][idx]
+                teacher_obs = self._select_teacher_obs(actor_obs, critic_obs)
                 actions = batch["actions"][idx]
                 old_log_probs = batch["log_probs"][idx]
                 adv = batch["advantages"][idx]
                 returns = batch["returns"][idx]
 
-                log_probs, entropy = self.teacher_policy.evaluate_actions(critic_obs, actions)
+                log_probs, entropy = self.teacher_policy.evaluate_actions(teacher_obs, actions)
                 ratio = torch.exp(log_probs - old_log_probs)
                 unclipped = ratio * adv
                 clipped = torch.clamp(ratio, 1.0 - self.cfg.ppo_clip_ratio, 1.0 + self.cfg.ppo_clip_ratio) * adv
@@ -314,9 +322,10 @@ class ADDTrainer:
                 idx = permutation[start : start + minibatch_size]
                 actor_obs = batch["actor_obs"][idx]
                 critic_obs = batch["critic_obs"][idx]
+                teacher_obs = self._select_teacher_obs(actor_obs, critic_obs)
 
                 with torch.no_grad():
-                    teacher_targets = self.teacher_policy.deterministic(critic_obs)
+                    teacher_targets = self.teacher_policy.deterministic(teacher_obs)
 
                 student_actions = self.student_policy.deterministic(actor_obs)
                 bc_loss = self.cfg.student_bc_weight * (student_actions - teacher_targets).square().mean()
@@ -417,13 +426,15 @@ class ADDTrainer:
 
     def teacher_actions(
         self,
-        critic_obs: torch.Tensor,
+        actor_obs: torch.Tensor,
+        critic_obs: torch.Tensor | None = None,
         sample: bool = False,
     ) -> torch.Tensor:
+        teacher_obs = self._select_teacher_obs(actor_obs, critic_obs)
         if sample:
-            actions, _ = self.teacher_policy.sample(critic_obs)
+            actions, _ = self.teacher_policy.sample(teacher_obs)
             return actions
-        return self.teacher_policy.deterministic(critic_obs)
+        return self.teacher_policy.deterministic(teacher_obs)
 
     def _checkpoint_payload(self) -> dict[str, Any]:
         payload = {

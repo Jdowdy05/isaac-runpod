@@ -20,13 +20,19 @@ POLICY_CONTROL_HZ = 50.0
 POLICY_DECIMATION = int(round(1.0 / (POLICY_CONTROL_HZ * PHYSICS_DT)))
 ACTOR_HISTORY_STEPS = 10
 CONTACT_GROUP_COUNT = 6
-COMMAND_VEL_DIM = 2
-PHASE_DIM = 2
 CONTACT_SENSOR_BODY_REGEX = "l_el_link|r_el_link|l_knee_link|r_knee_link|l_ank_roll_link|r_ank_roll_link"
 
 
 def compute_actor_frame_dim(action_dim: int) -> int:
-    return 3 + 3 + 3 + action_dim + action_dim + action_dim + SPARSE_POSE_DIM + COMMAND_VEL_DIM + PHASE_DIM
+    return (
+        3
+        + 3
+        + 3
+        + action_dim
+        + action_dim
+        + action_dim
+        + SPARSE_POSE_DIM
+    )
 
 
 def compute_actor_obs_dim(action_dim: int, history_steps: int) -> int:
@@ -40,6 +46,7 @@ def compute_critic_obs_dim(action_dim: int, history_steps: int) -> int:
 
 def compute_action_dim(profile) -> int:
     return len(get_action_joint_names(profile))
+
 
 if POLICY_DECIMATION != 10:
     raise ValueError(
@@ -55,15 +62,20 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     physics_engine = "physx"
     actor_history_steps = ACTOR_HISTORY_STEPS
 
-    action_scale = 0.45
-    action_clip = 1.0
+    # RSL-RL/H2O-style action contract: policies emit unsquashed real-valued
+    # normalized joint commands.  The environment maps -1/+1 to each joint's
+    # lower/upper position limit around the standing default and clips the final
+    # target to the joint limits, so no joint is limited to a fixed 0.45 rad move.
+    action_clip = 100.0
     joint_vel_scale = 0.05
     root_lin_acc_scale = 0.05
     action_rate_weight = 0.08
+    raw_action_excess_weight = 1.0e-2
     energy_weight = 2.0e-4
     pose_pos_weight = 1.75
     pose_rot_weight = 0.4
-    locomotion_weight = 1.1
+    add_diff_reward_weight = 1.0
+    add_diff_reward_sigma = 4.0
     upright_weight = 0.8
     root_height_weight = 0.4
     alive_reward = 0.2
@@ -88,6 +100,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
 
     teleop_mode = "synthetic"
     teleop_dataset_path: str | None = None
+    truncate_on_command_end = True
 
     scene = InteractiveSceneCfg(num_envs=4096, env_spacing=3.0, replicate_physics=True)
     terrain = TerrainImporterCfg(

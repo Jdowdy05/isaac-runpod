@@ -13,7 +13,7 @@ Options:
   --steps N              Playback steps to record. Default: 500.
   --output PATH          Output mp4 path. Default: checkpoints/add/videos/RUN/op3_add_camera_playback_ITER.mp4.
   --task TASK            Isaac Lab task. Default: Isaac-OP3-Teleop-Direct-v0.
-  --use-teacher          Record the privileged teacher instead of the deployment student.
+  --use-teacher          Record the teacher policy instead of the deployment student.
   -h, --help             Show this help.
 USAGE
 }

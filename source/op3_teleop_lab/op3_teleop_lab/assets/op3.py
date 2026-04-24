@@ -143,7 +143,7 @@ OP3_MINIMAL_CFG = ArticulationCfg(
         },
         joint_vel={".*": 0.0},
     ),
-    soft_joint_pos_limit_factor=0.85,
+    soft_joint_pos_limit_factor=1.0,
     actuators={
         "legs": DelayedPDActuatorCfg(
             joint_names_expr=[".*_hip_yaw", ".*_hip_roll", ".*_hip_pitch", ".*_knee.*"],
@@ -272,7 +272,7 @@ OP3_CFG = ArticulationCfg(
         },
         joint_vel={".*": 0.0},
     ),
-    soft_joint_pos_limit_factor=0.85,
+    soft_joint_pos_limit_factor=1.0,
     actuators={
         "legs": DelayedPDActuatorCfg(
             joint_names_expr=[".*_hip_yaw", ".*_hip_roll", ".*_hip_pitch", ".*_knee.*"],

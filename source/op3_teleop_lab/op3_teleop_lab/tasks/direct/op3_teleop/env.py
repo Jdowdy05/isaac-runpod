@@ -80,10 +80,15 @@ class OP3TeleopEnv(DirectRLEnv):
         self._root_body_id = self._body_ids["pelvis"]
 
         self._joint_lower, self._joint_upper = self._gather_joint_limits()
-        self._default_joint_pos = self._select_joint_columns(self.robot.data.default_joint_pos).clone()
+        self._default_joint_pos = torch.clamp(
+            self._select_joint_columns(self.robot.data.default_joint_pos).clone(),
+            self._joint_lower,
+            self._joint_upper,
+        )
         self._default_joint_vel = self._select_joint_columns(self.robot.data.default_joint_vel).clone()
         self._default_fixed_joint_pos = self._select_fixed_joint_columns(self.robot.data.default_joint_pos).clone()
         self._default_fixed_joint_vel = self._select_fixed_joint_columns(self.robot.data.default_joint_vel).clone()
+        self._action_scale_pos, self._action_scale_neg = self._compute_action_scales()
         self._default_joint_stiffness = self._maybe_select_joint_columns("default_joint_stiffness")
         self._default_joint_damping = self._maybe_select_joint_columns("default_joint_damping")
         self._default_root_state = self._resolve_default_root_state()
@@ -130,7 +135,8 @@ class OP3TeleopEnv(DirectRLEnv):
             and hasattr(self.robot, "write_joint_effort_limit_to_sim")
         )
 
-        self.actions = torch.zeros(self.num_envs, len(self._joint_ids), dtype=torch.float32, device=self.device)
+        self.raw_actions = torch.zeros(self.num_envs, len(self._joint_ids), dtype=torch.float32, device=self.device)
+        self.actions = torch.zeros_like(self.raw_actions)
         self.prev_actions = torch.zeros_like(self.actions)
         self.position_targets = self._default_joint_pos.clone()
         self.fixed_position_targets = self._default_fixed_joint_pos.clone()
@@ -226,6 +232,25 @@ class OP3TeleopEnv(DirectRLEnv):
         lower = torch.index_select(limits[:, 0], dim=0, index=self._joint_ids_tensor)
         upper = torch.index_select(limits[:, 1], dim=0, index=self._joint_ids_tensor)
         return lower, upper
+
+    def _compute_action_scales(self) -> tuple[torch.Tensor, torch.Tensor]:
+        scale_pos = self._joint_upper.unsqueeze(0) - self._default_joint_pos
+        scale_neg = self._default_joint_pos - self._joint_lower.unsqueeze(0)
+        min_scale = torch.full_like(scale_pos, 1.0e-6)
+        return torch.maximum(scale_pos, min_scale), torch.maximum(scale_neg, min_scale)
+
+    def _actions_to_position_targets(self, actions: torch.Tensor) -> torch.Tensor:
+        action_clip = float(getattr(self.cfg, "action_clip", 100.0))
+        clipped_actions = torch.clamp(actions, -action_clip, action_clip)
+        scale = torch.where(clipped_actions >= 0.0, self._action_scale_pos, self._action_scale_neg)
+        targets = self._default_joint_pos + clipped_actions * scale
+        return torch.clamp(targets, self._joint_lower, self._joint_upper)
+
+    def _position_targets_to_normalized_actions(self, position_targets: torch.Tensor) -> torch.Tensor:
+        delta = position_targets - self._default_joint_pos
+        scale = torch.where(delta >= 0.0, self._action_scale_pos, self._action_scale_neg)
+        normalized_actions = delta / torch.clamp(scale, min=1.0e-6)
+        return torch.clamp(normalized_actions, -1.0, 1.0)
 
     def _select_joint_columns(self, tensor: torch.Tensor) -> torch.Tensor:
         tensor = self._as_torch(tensor)
@@ -342,12 +367,6 @@ class OP3TeleopEnv(DirectRLEnv):
 
         self._last_torque_scale = scale
 
-    def _get_root_planar_velocity(self) -> torch.Tensor:
-        root_lin_vel = getattr(self.robot.data, "root_lin_vel_w", None)
-        if root_lin_vel is None:
-            root_lin_vel = self.robot.data.root_lin_vel_b
-        return self._as_torch(root_lin_vel)[:, :2]
-
     def _get_root_linear_velocity_b(self) -> torch.Tensor:
         root_lin_vel_b = getattr(self.robot.data, "root_lin_vel_b", None)
         if root_lin_vel_b is not None:
@@ -409,8 +428,6 @@ class OP3TeleopEnv(DirectRLEnv):
         root_lin_acc_b = self._get_root_linear_acceleration_b()
         joint_pos_scaled = self._scale_joint_pos(joint_pos)
         sparse_pose = self.teleop_command.flatten()
-        command_lin_vel = self.teleop_command.target_lin_vel_xy
-        phase_obs = torch.stack((torch.sin(self.teleop_command.phase), torch.cos(self.teleop_command.phase)), dim=-1)
         return torch.cat(
             (
                 root_ang_vel,
@@ -420,8 +437,6 @@ class OP3TeleopEnv(DirectRLEnv):
                 joint_vel * self.cfg.joint_vel_scale,
                 self.prev_actions,
                 sparse_pose,
-                command_lin_vel,
-                phase_obs,
             ),
             dim=-1,
         )
@@ -438,10 +453,10 @@ class OP3TeleopEnv(DirectRLEnv):
             self._torque_curriculum_step += 1
             self._apply_torque_limit_curriculum()
         self.prev_actions.copy_(self.actions)
-        action_clip = float(getattr(self.cfg, "action_clip", 1.0))
-        self.actions = torch.clamp(actions, -action_clip, action_clip)
-        unclipped_targets = self._default_joint_pos + self.cfg.action_scale * self.actions
-        self.position_targets = torch.clamp(unclipped_targets, self._joint_lower, self._joint_upper)
+        action_clip = float(getattr(self.cfg, "action_clip", 100.0))
+        self.raw_actions = torch.clamp(actions, -action_clip, action_clip)
+        self.position_targets = self._actions_to_position_targets(self.raw_actions)
+        self.actions = self._position_targets_to_normalized_actions(self.position_targets)
 
     def _apply_action(self) -> None:
         self.robot.set_joint_position_target(self.position_targets, joint_ids=self._joint_ids)
@@ -467,6 +482,9 @@ class OP3TeleopEnv(DirectRLEnv):
             "add_diff": transition_add_diff,
             "task_reward": task_reward.clone(),
         }
+        reward_terms = getattr(self, "_last_reward_terms", None)
+        if reward_terms is not None:
+            self.extras["log"] = reward_terms
         return {"policy": actor_obs, "critic": critic_obs}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -476,9 +494,13 @@ class OP3TeleopEnv(DirectRLEnv):
 
         body_pos_w = self._as_torch(self.robot.data.body_pos_w)
         body_quat_w = quat_normalize(self._as_torch(self.robot.data.body_quat_w))
+        identity_quat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        identity_quat[:, 3] = 1.0
 
         pose_pos_reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         pose_rot_reward = torch.zeros_like(pose_pos_reward)
+        add_diff_sq_sum = torch.zeros_like(pose_pos_reward)
+        add_diff_dim_count = torch.zeros_like(pose_pos_reward)
 
         for segment_name in TRACKED_SEGMENTS:
             body_id = self._body_ids[segment_name]
@@ -487,24 +509,29 @@ class OP3TeleopEnv(DirectRLEnv):
             rot_valid = self.teleop_command.rotation_valid[:, seg_idx].float()
 
             if segment_name == "pelvis":
-                pos_error = torch.linalg.norm(body_pos_w[:, body_id] - root_pos, dim=-1)
-                current_quat = root_quat
+                current_pos_rel = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+                current_quat = identity_quat
             else:
-                current_pos_rel = body_pos_w[:, body_id] - root_pos
-                pos_error = torch.linalg.norm(current_pos_rel - self.teleop_command.positions[:, seg_idx], dim=-1)
+                current_pos_rel = quat_apply(root_quat_inv, body_pos_w[:, body_id] - root_pos)
                 current_quat = quat_normalize(quat_mul(root_quat_inv, body_quat_w[:, body_id]))
 
+            pos_error = torch.linalg.norm(current_pos_rel - self.teleop_command.positions[:, seg_idx], dim=-1)
             pose_pos_reward += pos_valid * torch.exp(-self.cfg.pose_tracking_sigma * pos_error.square())
+            add_diff_sq_sum += pos_valid * pos_error.square()
+            add_diff_dim_count += pos_valid * 3.0
 
             target_quat = quat_normalize(self.teleop_command.orientations[:, seg_idx])
             quat_alignment = torch.abs(torch.sum(current_quat * target_quat, dim=-1))
             quat_error = 1.0 - torch.clamp(quat_alignment, 0.0, 1.0)
             pose_rot_reward += rot_valid * torch.exp(-self.cfg.body_orientation_sigma * quat_error.square())
+            target_rot = quaternion_to_tangent_and_normal(target_quat)
+            current_rot = quaternion_to_tangent_and_normal(current_quat)
+            add_diff_sq_sum += rot_valid * torch.sum((target_rot - current_rot).square(), dim=-1)
+            add_diff_dim_count += rot_valid * 6.0
 
-        root_lin_vel_xy = self._get_root_planar_velocity()
-        cmd_vel_xy = self.teleop_command.target_lin_vel_xy
-        locomotion_error = torch.linalg.norm(root_lin_vel_xy - cmd_vel_xy, dim=-1)
-        locomotion_reward = torch.exp(-4.0 * locomotion_error.square())
+        add_diff_mse = add_diff_sq_sum / torch.clamp(add_diff_dim_count, min=1.0)
+        add_diff_reward = torch.exp(-self.cfg.add_diff_reward_sigma * add_diff_mse)
+        add_diff_reward = add_diff_reward * (add_diff_dim_count > 0.0).float()
 
         projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
         upright_reward = torch.clamp((-projected_gravity[:, 2]), min=0.0, max=1.0)
@@ -519,6 +546,7 @@ class OP3TeleopEnv(DirectRLEnv):
         foot_slip_penalty = torch.sum(foot_contact * foot_planar_speed.square(), dim=-1)
 
         action_rate_penalty = torch.sum((self.actions - self.prev_actions).square(), dim=-1)
+        raw_action_excess_penalty = torch.sum(torch.relu(torch.abs(self.raw_actions) - 1.0).square(), dim=-1)
         joint_pos = self._select_joint_columns(self.robot.data.joint_pos)
         joint_vel = self._select_joint_columns(self.robot.data.joint_vel)
         energy_penalty = torch.sum((self.actions * joint_vel).square(), dim=-1)
@@ -533,15 +561,22 @@ class OP3TeleopEnv(DirectRLEnv):
             self.cfg.alive_reward
             + self.cfg.pose_pos_weight * pose_pos_reward
             + self.cfg.pose_rot_weight * pose_rot_reward
-            + self.cfg.locomotion_weight * locomotion_reward
+            + self.cfg.add_diff_reward_weight * add_diff_reward
             + self.cfg.upright_weight * upright_reward
             + self.cfg.root_height_weight * root_height_reward
             - self.cfg.action_rate_weight * action_rate_penalty
+            - self.cfg.raw_action_excess_weight * raw_action_excess_penalty
             - self.cfg.energy_weight * energy_penalty
             - self.cfg.foot_slip_weight * foot_slip_penalty
             - self.cfg.root_acc_weight * root_acc_penalty
             - self.cfg.joint_limit_weight * joint_limit_penalty
         )
+        self._last_reward_terms = {
+            "reward/add_diff": add_diff_reward.detach().mean(),
+            "reward/pose_pos": pose_pos_reward.detach().mean(),
+            "reward/pose_rot": pose_rot_reward.detach().mean(),
+            "penalty/raw_action_excess": raw_action_excess_penalty.detach().mean(),
+        }
         self._last_add_diff = self._compute_add_differential()
         self._have_valid_transition_add_diff = True
         return rewards
@@ -550,6 +585,8 @@ class OP3TeleopEnv(DirectRLEnv):
         projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
         tilt_angle = torch.acos(torch.clamp(-projected_gravity[:, 2], -1.0, 1.0)).abs()
         time_out = self.episode_length_buf >= self.max_episode_length - 1
+        if getattr(self.cfg, "truncate_on_command_end", True):
+            time_out = time_out | self.command_generator.command_done
         fallen = tilt_angle > self.cfg.termination_tilt_angle
         return fallen, time_out
 
@@ -601,6 +638,7 @@ class OP3TeleopEnv(DirectRLEnv):
         self._randomize_joint_gains(env_ids)
         self._randomize_body_masses(env_ids)
 
+        self.raw_actions[env_ids] = 0.0
         self.actions[env_ids] = 0.0
         self.prev_actions[env_ids] = 0.0
         self.position_targets[env_ids] = joint_pos
@@ -656,6 +694,8 @@ class OP3TeleopEnv(DirectRLEnv):
         root_quat_inv = quat_conjugate(root_quat)
         body_pos_w = self._as_torch(self.robot.data.body_pos_w)
         body_quat_w = quat_normalize(self._as_torch(self.robot.data.body_quat_w))
+        identity_quat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        identity_quat[:, 3] = 1.0
 
         pos_diffs = []
         rot_diffs = []
@@ -665,9 +705,9 @@ class OP3TeleopEnv(DirectRLEnv):
 
             if segment_name == "pelvis":
                 current_pos = torch.zeros(self.num_envs, 3, dtype=torch.float32, device=self.device)
-                current_quat = root_quat
+                current_quat = identity_quat
             else:
-                current_pos = body_pos_w[:, body_id] - root_pos
+                current_pos = quat_apply(root_quat_inv, body_pos_w[:, body_id] - root_pos)
                 current_quat = quat_normalize(quat_mul(root_quat_inv, body_quat_w[:, body_id]))
 
             target_pos = self.teleop_command.positions[:, seg_idx]
@@ -680,12 +720,10 @@ class OP3TeleopEnv(DirectRLEnv):
             rot_mask = self.teleop_command.rotation_valid[:, seg_idx].unsqueeze(-1).float()
             rot_diffs.append((target_rot - current_rot) * rot_mask)
 
-        vel_diff = self.teleop_command.target_lin_vel_xy - self._get_root_planar_velocity()
         return torch.cat(
             (
                 torch.cat(pos_diffs, dim=-1),
                 torch.cat(rot_diffs, dim=-1),
-                vel_diff,
             ),
             dim=-1,
         )

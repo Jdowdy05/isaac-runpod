@@ -1,22 +1,23 @@
 # OP3 Teleop Lab
 
-External Isaac Lab project scaffold for end-to-end teleoperation policy learning on the Robotis OP3. The intended policy maps sparse human observations and robot state directly to OP3 joint position targets, with locomotion and balance included in the task.
+External Isaac Lab project scaffold for end-to-end teleoperation policy learning on the Robotis OP3. The intended policy maps sparse human pose observations and robot state directly to OP3 joint position targets, with balance included in the task.
 
 The project is structured to work with Isaac Lab's external-project pattern and keeps two physics paths:
 
-- Newton as the primary training backend.
-- PhysX as a fallback path for compatibility and debugging.
+- PhysX as the current training and playback backend.
+- Newton as an experimental path that is not safe for OP3 training until the known ground/contact failure is fixed.
 - The OP3 task timing is fixed to a 0.002 s physics step with decimation 10, so the policy runs at 50 Hz.
 
 The current repository is a scaffold, not a finished training system. It gives you:
 
 - An Isaac Lab extension package with direct-workflow task registration.
-- An OP3 teleop locomotion environment skeleton with joint-position actions.
-- A sparse human observation schema with sensor validity masks.
+- An OP3 teleop sparse-pose environment skeleton with joint-position actions.
+- A sparse human observation schema with sensor validity masks and pelvis-frame pose commands.
 - RunPod bootstrap scripts.
 - Open-dataset download and preprocessing scripts.
 - Notes on the later addition of licensed motion sources such as AMASS.
 - A standalone ADD trainer path based on the MimicKit paper and codebase.
+- An RSL-RL PPO entry point for the same task, using unsquashed Gaussian actions and learned action noise.
 
 ## Project Layout
 
@@ -70,7 +71,19 @@ The current repository is a scaffold, not a finished training system. It gives y
    python scripts/rl_games/train.py --task Isaac-OP3-Teleop-Direct-v0 --headless
    ```
 
-For Newton, use:
+   To train with stock RSL-RL PPO:
+
+   ```bash
+   python scripts/rsl_rl/train.py --task Isaac-OP3-Teleop-Direct-v0 --headless
+   ```
+
+   To train with RSL-RL PPO plus the online ADD adversarial discriminator:
+
+   ```bash
+   python scripts/rsl_rl/train_add.py --task Isaac-OP3-Teleop-Direct-v0 --headless
+   ```
+
+For the experimental Newton path, use:
 
 ```bash
 python scripts/rl_games/train.py --task Isaac-OP3-Teleop-Newton-Direct-v0 --headless
@@ -79,8 +92,10 @@ python scripts/rl_games/train.py --task Isaac-OP3-Teleop-Newton-Direct-v0 --head
 To train with ADD instead of the RL Games baseline:
 
 ```bash
-python scripts/add/train.py --task Isaac-OP3-Teleop-Newton-Direct-v0 --headless
+python scripts/add/train.py --task Isaac-OP3-Teleop-Direct-v0 --headless
 ```
+
+The action interface follows the H2O/OmniH2O/RSL-RL convention: actor outputs are unsquashed real-valued normalized joint commands. The environment maps `-1` and `+1` to each controlled joint's lower and upper position targets around the standing default and clips the final target to the joint limits.
 
 ## Dataset Strategy
 

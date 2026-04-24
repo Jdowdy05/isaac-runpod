@@ -21,11 +21,11 @@ def build_arg_parser():
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=2000)
-    parser.add_argument("--use_teacher", action="store_true", help="Play the privileged teacher instead of the deployment student.")
+    parser.add_argument("--use_teacher", action="store_true", help="Play the teacher policy instead of the deployment student.")
     parser.add_argument(
         "--sample_actions",
         action="store_true",
-        help="Sample actions from the privileged teacher instead of using its deterministic mean.",
+        help="Sample actions from the teacher policy instead of using its deterministic mean.",
     )
     parser.add_argument("--print_stats_every", type=int, default=0, help="Print observation and action statistics every N steps.")
     parser.add_argument("--video", action="store_true", help="Record an MP4 clip with gymnasium RecordVideo.")
@@ -53,14 +53,12 @@ def _format_joint_target_debug(base_env, action_names: list[str], actions) -> st
 
     current_joint_pos = base_env._select_joint_columns(base_env.robot.data.joint_pos)[0].detach().cpu()
     default_joint_pos = base_env._default_joint_pos[0].detach().cpu()
-    joint_lower = base_env._joint_lower.detach().cpu()
-    joint_upper = base_env._joint_upper.detach().cpu()
     clipped_actions = torch.clamp(
-        actions[0].detach().cpu(),
-        -float(getattr(base_env.cfg, "action_clip", 1.0)),
-        float(getattr(base_env.cfg, "action_clip", 1.0)),
+        actions.detach(),
+        -float(getattr(base_env.cfg, "action_clip", 100.0)),
+        float(getattr(base_env.cfg, "action_clip", 100.0)),
     )
-    target_joint_pos = torch.clamp(default_joint_pos + float(base_env.cfg.action_scale) * clipped_actions, joint_lower, joint_upper)
+    target_joint_pos = base_env._actions_to_position_targets(clipped_actions)[0].detach().cpu()
     target_error = (target_joint_pos - current_joint_pos).abs()
     joint_from_default = (current_joint_pos - default_joint_pos).abs()
     top_k = min(4, target_error.numel())
@@ -194,7 +192,7 @@ def main() -> None:
     with torch.no_grad():
         for step in range(args.steps):
             if args.use_teacher:
-                actions = trainer.teacher_actions(critic_obs, sample=args.sample_actions)
+                actions = trainer.teacher_actions(actor_obs, critic_obs, sample=args.sample_actions)
             else:
                 actions = trainer.deployment_actions(actor_obs)
 

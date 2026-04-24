@@ -8,8 +8,11 @@
    If you are already inside the pre-built Isaac Lab Docker container, the bootstrap script now skips cloning and reinstalling Isaac Lab and only installs the project package and Python-side extras.
 4. Run `scripts/runpod/download_open_datasets.sh`.
 5. Set `OP3_CFG_IMPORT` after your OP3 asset config exists.
-6. Train with either the Newton or PhysX task id.
-7. For the paper-aligned ADD trainer, use `scripts/runpod/train_add_newton.sh` or `scripts/runpod/train_add_physx.sh`.
+6. Train with the PhysX task id unless you are explicitly debugging Newton contact behavior.
+7. For the paper-aligned standalone ADD trainer, use `scripts/runpod/train_add_physx.sh`.
+8. For stock RSL-RL PPO with the same pelvis-frame sparse-pose task and dense ADD-style environment reward, use `scripts/runpod/train_rsl_physx.sh`.
+9. For RSL-RL PPO plus the true online ADD adversarial discriminator, use `scripts/runpod/train_rsl_add_physx.sh`.
+10. Treat Newton scripts as experimental until the OP3 Newton ground-contact issue is resolved.
 
 ## Useful Environment Variables
 
