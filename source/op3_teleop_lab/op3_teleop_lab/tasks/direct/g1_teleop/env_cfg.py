@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import isaaclab.sim as sim_utils
+import copy
+
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
+from isaaclab_assets.robots.unitree import G1_29DOF_CFG
 
-from op3_teleop_lab.assets.op3 import resolve_op3_cfg
 from op3_teleop_lab.tasks.direct.humanoid_teleop.env_cfg import (
     ACTOR_HISTORY_STEPS,
     PHYSICS_DT,
@@ -21,17 +22,25 @@ from op3_teleop_lab.tasks.direct.humanoid_teleop.env_cfg import (
     resolve_teleop_mode,
 )
 
-from .robot_profile import make_default_op3_profile
+from .robot_profile import make_default_g1_profile
 
 if POLICY_DECIMATION != 10:
     raise ValueError(
-        "OP3 teleop timing configuration is inconsistent: expected decimation 10 for 50 Hz policy control "
+        "G1 teleop timing configuration is inconsistent: expected decimation 10 for 50 Hz policy control "
         f"with a {PHYSICS_DT:.3f} s physics timestep."
     )
 
 
+def _make_g1_teleop_articulation_cfg():
+    cfg = copy.deepcopy(G1_29DOF_CFG)
+    cfg.prim_path = "/World/envs/env_.*/Robot"
+    cfg.spawn.activate_contact_sensors = True
+    cfg.init_state.rot = (0.0, 0.0, 0.0, 1.0)
+    return cfg
+
+
 @configclass
-class OP3TeleopEnvCfg(DirectRLEnvCfg):
+class G1TeleopEnvCfg(DirectRLEnvCfg):
     decimation = POLICY_DECIMATION
     episode_length_s = 20.0
     physics_engine = "physx"
@@ -66,20 +75,20 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     reset_lin_vel_noise = 0.1
     reset_ang_vel_noise = 0.2
     reset_joint_pos_noise = 0.08
-    torque_curriculum_initial_scale = 3.0
+    torque_curriculum_initial_scale = 1.0
     torque_curriculum_final_scale = 1.0
-    torque_curriculum_steps = 50000
+    torque_curriculum_steps = 1
 
     teleop_mode = "synthetic"
     teleop_dataset_path: str | None = None
     truncate_on_command_end = True
 
-    scene = InteractiveSceneCfg(num_envs=4096, env_spacing=3.0, replicate_physics=True)
+    scene = InteractiveSceneCfg(num_envs=2048, env_spacing=3.0, replicate_physics=True)
     terrain = build_default_terrain_cfg()
     sim = build_default_sim_cfg(physics_engine="physx")
 
-    profile = make_default_op3_profile()
-    robot = resolve_op3_cfg().replace(prim_path="/World/envs/env_.*/Robot")
+    profile = make_default_g1_profile()
+    robot = _make_g1_teleop_articulation_cfg()
     contact_sensor = build_contact_sensor_cfg(profile)
 
     action_space = compute_action_dim(profile)
@@ -102,8 +111,3 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
             self.action_space, self.actor_history_steps, len(self.profile.contact_segment_names)
         )
         self.state_space = 0
-
-
-@configclass
-class OP3TeleopNewtonEnvCfg(OP3TeleopEnvCfg):
-    physics_engine = "newton"

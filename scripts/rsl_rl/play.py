@@ -15,7 +15,7 @@ from common import (
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Play an OP3 RSL or RSL-ADD checkpoint.")
+    parser = argparse.ArgumentParser(description="Play a sparse humanoid RSL or RSL-ADD checkpoint.")
     parser.add_argument("--task", default="Isaac-OP3-Teleop-Direct-v0")
     parser.add_argument("--runner", choices=("ppo", "add"), default="ppo")
     parser.add_argument("--num_envs", type=int, default=1)
@@ -23,10 +23,7 @@ def build_arg_parser():
     parser.add_argument("--teleop_dataset_path", default=None)
     parser.add_argument(
         "--add_config",
-        default=str(
-            Path(__file__).resolve().parents[2]
-            / "source/op3_teleop_lab/op3_teleop_lab/tasks/direct/op3_teleop/agents/add_ppo_cfg.yaml"
-        ),
+        default=None,
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=2000)
@@ -55,12 +52,12 @@ def main() -> None:
     import torch
 
     import op3_teleop_lab.tasks  # noqa: F401
-    from op3_teleop_lab.tasks.direct.op3_teleop.env_cfg import OP3TeleopEnvCfg, OP3TeleopNewtonEnvCfg
+    from op3_teleop_lab.tasks.task_registry import make_env_cfg_for_task
 
     if args.teleop_mode is None and args.teleop_dataset_path is None:
         args.teleop_mode, args.teleop_dataset_path = default_dataset_path()
 
-    cfg = OP3TeleopNewtonEnvCfg() if "Newton" in args.task else OP3TeleopEnvCfg()
+    cfg = make_env_cfg_for_task(args.task)
     cfg.scene.num_envs = args.num_envs
     if args.teleop_mode is not None:
         cfg.teleop_mode = args.teleop_mode
@@ -81,6 +78,7 @@ def main() -> None:
 
     wrapped_env, runner, runner_device = create_rsl_runner(
         env=env,
+        task_name=args.task,
         runner_kind=args.runner,
         add_config_path=args.add_config if args.runner == "add" else None,
         diff_dim=None if diff is None else diff.shape[-1],

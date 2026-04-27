@@ -11,6 +11,7 @@ _RL_GAMES_CFG = (
 _RSL_RL_CFG = (
     "op3_teleop_lab.tasks.direct.op3_teleop.agents.rsl_rl_ppo_cfg:OP3TeleopPPORunnerCfg"
 )
+_ADD_CFG = "op3_teleop_lab.tasks.direct.op3_teleop.agents:add_ppo_cfg.yaml"
 
 
 gym.register(
@@ -21,6 +22,8 @@ gym.register(
         "env_cfg_entry_point": "op3_teleop_lab.tasks.direct.op3_teleop.env_cfg:OP3TeleopEnvCfg",
         "rl_games_cfg_entry_point": _RL_GAMES_CFG,
         "rsl_rl_cfg_entry_point": _RSL_RL_CFG,
+        "add_cfg_entry_point": _ADD_CFG,
+        "task_slug": "op3_teleop",
     },
 )
 
@@ -32,5 +35,7 @@ gym.register(
         "env_cfg_entry_point": "op3_teleop_lab.tasks.direct.op3_teleop.env_cfg:OP3TeleopNewtonEnvCfg",
         "rl_games_cfg_entry_point": _RL_GAMES_CFG,
         "rsl_rl_cfg_entry_point": _RSL_RL_CFG,
+        "add_cfg_entry_point": _ADD_CFG,
+        "task_slug": "op3_teleop",
     },
 )

@@ -127,7 +127,7 @@ def draw_state_frame(
 ):
     from PIL import Image, ImageDraw
     import torch
-    from op3_teleop_lab.tasks.direct.op3_teleop.env import quat_apply, quat_conjugate, quat_normalize
+    from op3_teleop_lab.tasks.direct.humanoid_teleop.env import quat_apply, quat_conjugate, quat_normalize
 
     image = Image.new("RGB", (width, height), (247, 248, 245))
     draw = ImageDraw.Draw(image)
@@ -217,7 +217,7 @@ def draw_state_frame(
 
     legend_y = height - 22
     draw.line((24, legend_y, 60, legend_y), fill=colors["actual"], width=4)
-    draw.text((68, legend_y - 8), "actual OP3 sparse bodies", fill=(24, 28, 32))
+    draw.text((68, legend_y - 8), "actual sparse bodies", fill=(24, 28, 32))
     draw.line((260, legend_y, 296, legend_y), fill=colors["target"], width=3)
     draw.text((304, legend_y - 8), "target sparse command", fill=(24, 28, 32))
     return image
@@ -226,6 +226,7 @@ def draw_state_frame(
 def create_rsl_runner(
     *,
     env,
+    task_name: str,
     runner_kind: str,
     add_config_path: str | None,
     diff_dim: int | None,
@@ -235,10 +236,10 @@ def create_rsl_runner(
     from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
     from op3_teleop_lab.learning.add.config import ADDTrainingConfig
     from op3_teleop_lab.learning.rsl_add import RslAddOnPolicyRunner
-    from op3_teleop_lab.tasks.direct.op3_teleop.agents.rsl_rl_ppo_cfg import OP3TeleopPPORunnerCfg
+    from op3_teleop_lab.tasks.task_registry import make_rsl_runner_cfg_for_task, resolve_add_config_path_for_task
     from rsl_rl.runners import OnPolicyRunner
 
-    runner_cfg_obj = OP3TeleopPPORunnerCfg()
+    runner_cfg_obj = make_rsl_runner_cfg_for_task(task_name)
     if device is not None:
         runner_cfg_obj.device = device
     runner_cfg_obj = handle_deprecated_rsl_rl_cfg(runner_cfg_obj, metadata.version("rsl-rl-lib"))
@@ -247,7 +248,7 @@ def create_rsl_runner(
 
     if runner_kind == "add":
         if add_config_path is None:
-            raise ValueError("RSL-ADD playback requires --add_config.")
+            add_config_path = resolve_add_config_path_for_task(task_name)
         if diff_dim is None:
             raise ValueError("RSL-ADD playback requires a valid add_diff dimension.")
         add_cfg = ADDTrainingConfig.from_yaml(add_config_path)

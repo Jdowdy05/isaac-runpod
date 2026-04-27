@@ -22,7 +22,7 @@ else
 fi
 
 ARGS=(
-  --task Isaac-OP3-Teleop-Direct-v0
+  --task Isaac-G1-Teleop-Direct-v0
   --num_envs "${NUM_ENVS}"
   --teleop_mode "${TELEOP_MODE}"
   --headless

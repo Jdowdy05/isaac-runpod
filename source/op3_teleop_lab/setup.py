@@ -15,6 +15,7 @@ setup(
         "smplx>=0.1.28",
     ],
     package_data={
+        "op3_teleop_lab.tasks.direct.g1_teleop.agents": ["*.yaml"],
         "op3_teleop_lab.tasks.direct.op3_teleop.agents": ["*.yaml"],
     },
 )

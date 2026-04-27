@@ -19,17 +19,14 @@ _STATE_CONNECTIONS = (
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Record an OP3 ADD checkpoint with a headless camera sensor.")
+    parser = argparse.ArgumentParser(description="Record a sparse humanoid ADD checkpoint with a headless camera sensor.")
     parser.add_argument("--task", default="Isaac-OP3-Teleop-Direct-v0")
     parser.add_argument("--num_envs", type=int, default=1)
     parser.add_argument("--teleop_mode", choices=("synthetic", "dataset"), default=None)
     parser.add_argument("--teleop_dataset_path", default=None)
     parser.add_argument(
         "--config",
-        default=str(
-            Path(__file__).resolve().parents[2]
-            / "source/op3_teleop_lab/op3_teleop_lab/tasks/direct/op3_teleop/agents/add_ppo_cfg.yaml"
-        ),
+        default=None,
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=1000)
@@ -160,7 +157,7 @@ def _draw_state_frame(
 ):
     from PIL import Image, ImageDraw
     import torch
-    from op3_teleop_lab.tasks.direct.op3_teleop.env import quat_apply, quat_conjugate, quat_normalize
+    from op3_teleop_lab.tasks.direct.humanoid_teleop.env import quat_apply, quat_conjugate, quat_normalize
 
     image = Image.new("RGB", (width, height), (247, 248, 245))
     draw = ImageDraw.Draw(image)
@@ -246,7 +243,7 @@ def _draw_state_frame(
 
     legend_y = height - 22
     draw.line((24, legend_y, 60, legend_y), fill=colors["actual"], width=4)
-    draw.text((68, legend_y - 8), "actual OP3 sparse bodies", fill=(24, 28, 32))
+    draw.text((68, legend_y - 8), "actual sparse bodies", fill=(24, 28, 32))
     draw.line((260, legend_y, 296, legend_y), fill=colors["target"], width=3)
     draw.text((304, legend_y - 8), "target sparse command", fill=(24, 28, 32))
     return image
@@ -274,21 +271,22 @@ def main() -> None:
 
     from op3_teleop_lab.learning.add.config import ADDTrainingConfig
     from op3_teleop_lab.learning.add.trainer import ADDTrainer
-    from op3_teleop_lab.tasks.direct.op3_teleop.constants import SEGMENT_INDEX, TRACKED_SEGMENTS
-    from op3_teleop_lab.tasks.direct.op3_teleop.env_cfg import OP3TeleopEnvCfg, OP3TeleopNewtonEnvCfg
+    from op3_teleop_lab.tasks.direct.humanoid_teleop.constants import SEGMENT_INDEX, TRACKED_SEGMENTS
+    from op3_teleop_lab.tasks.task_registry import make_env_cfg_for_task, resolve_add_config_path_for_task
     import op3_teleop_lab.tasks  # noqa: F401
 
     if args.teleop_mode is None and args.teleop_dataset_path is None:
         args.teleop_mode, args.teleop_dataset_path = _default_dataset_path()
 
-    cfg = OP3TeleopNewtonEnvCfg() if "Newton" in args.task else OP3TeleopEnvCfg()
+    cfg = make_env_cfg_for_task(args.task)
     cfg.scene.num_envs = args.num_envs
     if args.teleop_mode is not None:
         cfg.teleop_mode = args.teleop_mode
     if args.teleop_dataset_path is not None:
         cfg.teleop_dataset_path = args.teleop_dataset_path
 
-    train_cfg = ADDTrainingConfig.from_yaml(args.config)
+    config_path = args.config if args.config is not None else resolve_add_config_path_for_task(args.task)
+    train_cfg = ADDTrainingConfig.from_yaml(config_path)
     env = gym.make(args.task, cfg=cfg)
     base_env = env.unwrapped
 

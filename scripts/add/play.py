@@ -7,17 +7,14 @@ from pathlib import Path
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Play an OP3 ADD checkpoint.")
+    parser = argparse.ArgumentParser(description="Play a sparse humanoid ADD checkpoint.")
     parser.add_argument("--task", default="Isaac-OP3-Teleop-Direct-v0")
     parser.add_argument("--num_envs", type=int, default=1)
     parser.add_argument("--teleop_mode", choices=("synthetic", "dataset"), default=None)
     parser.add_argument("--teleop_dataset_path", default=None)
     parser.add_argument(
         "--config",
-        default=str(
-            Path(__file__).resolve().parents[2]
-            / "source/op3_teleop_lab/op3_teleop_lab/tasks/direct/op3_teleop/agents/add_ppo_cfg.yaml"
-        ),
+        default=None,
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--steps", type=int, default=2000)
@@ -31,7 +28,7 @@ def build_arg_parser():
     parser.add_argument("--video", action="store_true", help="Record an MP4 clip with gymnasium RecordVideo.")
     parser.add_argument("--video_length", type=int, default=1000)
     parser.add_argument("--video_dir", default=None)
-    parser.add_argument("--video_prefix", default="op3_add_playback")
+    parser.add_argument("--video_prefix", default="teleop_add_playback")
     parser.add_argument(
         "--record_viser",
         default=None,
@@ -109,7 +106,7 @@ def main() -> None:
     import op3_teleop_lab.tasks  # noqa: F401
     from op3_teleop_lab.learning.add.config import ADDTrainingConfig
     from op3_teleop_lab.learning.add.trainer import ADDTrainer
-    from op3_teleop_lab.tasks.direct.op3_teleop.env_cfg import OP3TeleopEnvCfg, OP3TeleopNewtonEnvCfg
+    from op3_teleop_lab.tasks.task_registry import make_env_cfg_for_task, resolve_add_config_path_for_task
 
     if args.teleop_mode is None and args.teleop_dataset_path is None:
         default_dataset = Path(__file__).resolve().parents[2] / "data/processed/open/teleop_sparse_pose.npz"
@@ -121,7 +118,7 @@ def main() -> None:
             args.teleop_mode = "dataset"
             args.teleop_dataset_path = str(fallback_dataset)
 
-    cfg = OP3TeleopNewtonEnvCfg() if "Newton" in args.task else OP3TeleopEnvCfg()
+    cfg = make_env_cfg_for_task(args.task)
     cfg.scene.num_envs = args.num_envs
     if args.teleop_mode is not None:
         cfg.teleop_mode = args.teleop_mode
@@ -143,7 +140,8 @@ def main() -> None:
             )
         ]
 
-    train_cfg = ADDTrainingConfig.from_yaml(args.config)
+    config_path = args.config if args.config is not None else resolve_add_config_path_for_task(args.task)
+    train_cfg = ADDTrainingConfig.from_yaml(config_path)
     render_mode = "rgb_array" if args.video else None
     env = gym.make(args.task, cfg=cfg, render_mode=render_mode)
     if args.video:

@@ -9,19 +9,16 @@ from pathlib import Path
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Train OP3 teleoperation with ADD.")
+    parser = argparse.ArgumentParser(description="Train sparse humanoid teleoperation with ADD.")
     parser.add_argument("--task", default="Isaac-OP3-Teleop-Direct-v0")
     parser.add_argument("--num_envs", type=int, default=2048)
     parser.add_argument("--teleop_mode", choices=("synthetic", "dataset"), default=None)
     parser.add_argument("--teleop_dataset_path", default=None)
     parser.add_argument(
         "--config",
-        default=str(
-            Path(__file__).resolve().parents[2]
-            / "source/op3_teleop_lab/op3_teleop_lab/tasks/direct/op3_teleop/agents/add_ppo_cfg.yaml"
-        ),
+        default=None,
     )
-    parser.add_argument("--out_dir", default=str(Path(__file__).resolve().parents[2] / "checkpoints/add"))
+    parser.add_argument("--out_dir", default=None)
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--max_iterations", type=int, default=None)
     return parser
@@ -64,19 +61,29 @@ def main() -> None:
     import op3_teleop_lab.tasks  # noqa: F401
     from op3_teleop_lab.learning.add.config import ADDTrainingConfig
     from op3_teleop_lab.learning.add.trainer import ADDTrainer
-    from op3_teleop_lab.tasks.direct.op3_teleop.env_cfg import OP3TeleopEnvCfg, OP3TeleopNewtonEnvCfg
+    from op3_teleop_lab.tasks.task_registry import (
+        make_env_cfg_for_task,
+        resolve_add_config_path_for_task,
+        task_slug_for_task,
+    )
 
-    cfg = OP3TeleopNewtonEnvCfg() if "Newton" in args.task else OP3TeleopEnvCfg()
+    cfg = make_env_cfg_for_task(args.task)
     cfg.scene.num_envs = args.num_envs
     if args.teleop_mode is not None:
         cfg.teleop_mode = args.teleop_mode
     if args.teleop_dataset_path is not None:
         cfg.teleop_dataset_path = args.teleop_dataset_path
 
-    train_cfg = ADDTrainingConfig.from_yaml(args.config)
+    config_path = args.config if args.config is not None else resolve_add_config_path_for_task(args.task)
+    train_cfg = ADDTrainingConfig.from_yaml(config_path)
     if args.max_iterations is not None:
         train_cfg.max_iterations = args.max_iterations
-    session_out_dir = resolve_session_out_dir(args.out_dir, args.checkpoint)
+    base_out_dir = (
+        Path(args.out_dir)
+        if args.out_dir is not None
+        else Path(__file__).resolve().parents[2] / "checkpoints" / "add" / task_slug_for_task(args.task)
+    )
+    session_out_dir = resolve_session_out_dir(base_out_dir, args.checkpoint)
     print(f"Checkpoint directory: {session_out_dir}")
 
     random.seed(train_cfg.seed)

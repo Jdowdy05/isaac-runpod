@@ -56,8 +56,10 @@ def main() -> None:
         f"{project_pythonpath}:{existing_pythonpath}" if existing_pythonpath else project_pythonpath
     )
     if args.teleop_mode:
+        env["HUMANOID_TELEOP_MODE"] = args.teleop_mode
         env["OP3_TELEOP_MODE"] = args.teleop_mode
     if args.teleop_dataset_path:
+        env["HUMANOID_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
         env["OP3_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
 
     bootstrap = (
