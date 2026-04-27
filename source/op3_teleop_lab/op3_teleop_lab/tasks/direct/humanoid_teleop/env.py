@@ -92,11 +92,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
         self._default_root_state = self._resolve_default_root_state()
         self._default_root_height = float(self._default_root_state[0, 2].item())
         self._contact_segments = tuple(self.cfg.profile.contact_segment_names)
-        self._contact_body_ids = torch.tensor(
-            [self._body_ids[name] for name in self._contact_segments],
-            dtype=torch.long,
-            device=self.device,
-        )
+        self._contact_body_ids = self._resolve_contact_body_ids()
         self._contact_sensor_body_ids = self._resolve_contact_sensor_body_ids()
         self._foot_contact_feature_ids = torch.tensor(
             [
@@ -166,11 +162,21 @@ class HumanoidTeleopEnv(DirectRLEnv):
         return body_ids
 
     def _resolve_contact_sensor_body_ids(self) -> torch.Tensor:
-        body_names = [self.cfg.profile.segment_to_body_name[name] for name in self._contact_segments]
+        body_names = list(self.cfg.profile.contact_body_names())
         ids, resolved_names = self.contact_sensor.find_bodies(body_names, preserve_order=True)
         if len(ids) != len(body_names):
             raise ValueError(
                 "Could not resolve all contact-sensor bodies. "
+                f"Expected {tuple(body_names)}, resolved {tuple(resolved_names)}."
+            )
+        return torch.tensor(ids, dtype=torch.long, device=self.device)
+
+    def _resolve_contact_body_ids(self) -> torch.Tensor:
+        body_names = list(self.cfg.profile.contact_body_names())
+        ids, resolved_names = self.robot.find_bodies(body_names, preserve_order=True)
+        if len(ids) != len(body_names):
+            raise ValueError(
+                "Could not resolve all articulation contact bodies. "
                 f"Expected {tuple(body_names)}, resolved {tuple(resolved_names)}."
             )
         return torch.tensor(ids, dtype=torch.long, device=self.device)
