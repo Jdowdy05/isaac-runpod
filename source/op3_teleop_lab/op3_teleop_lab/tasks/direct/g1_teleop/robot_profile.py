@@ -46,6 +46,10 @@ def make_default_g1_profile() -> SparseHumanoidRobotProfile:
             "left_foot": "left_ankle_roll_link",
             "right_foot": "right_ankle_roll_link",
         },
+        contact_segment_to_body_name={
+            "left_hand": "left_wrist_yaw_link",
+            "right_hand": "right_wrist_yaw_link",
+        },
         excluded_action_joint_names=(),
         termination_height=0.40,
         max_root_tilt_cos=0.55,

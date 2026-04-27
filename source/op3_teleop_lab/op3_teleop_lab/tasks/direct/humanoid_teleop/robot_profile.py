@@ -21,6 +21,7 @@ class SparseHumanoidRobotProfile:
 
     joint_names: tuple[str, ...] = ()
     segment_to_body_name: dict[str, str] = field(default_factory=dict)
+    contact_segment_to_body_name: dict[str, str] = field(default_factory=dict)
     excluded_action_joint_names: tuple[str, ...] = ()
     contact_segment_names: tuple[str, ...] = CONTACT_SEGMENT_NAMES
     termination_height: float = 0.14
@@ -30,12 +31,19 @@ class SparseHumanoidRobotProfile:
         missing = [name for name in TRACKED_SEGMENTS if name not in self.segment_to_body_name]
         if missing:
             raise ValueError(f"Missing body-name mappings for tracked segments: {missing}")
-        missing_contacts = [name for name in self.contact_segment_names if name not in self.segment_to_body_name]
+        missing_contacts = [
+            name
+            for name in self.contact_segment_names
+            if name not in self.segment_to_body_name and name not in self.contact_segment_to_body_name
+        ]
         if missing_contacts:
             raise ValueError(f"Missing body-name mappings for contact segments: {missing_contacts}")
 
+    def contact_body_name_for(self, segment_name: str) -> str:
+        return self.contact_segment_to_body_name.get(segment_name, self.segment_to_body_name[segment_name])
+
     def contact_body_names(self) -> tuple[str, ...]:
-        return tuple(self.segment_to_body_name[name] for name in self.contact_segment_names)
+        return tuple(self.contact_body_name_for(name) for name in self.contact_segment_names)
 
     def contact_sensor_body_regex(self) -> str:
         return "|".join(re.escape(name) for name in self.contact_body_names())
