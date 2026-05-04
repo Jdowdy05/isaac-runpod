@@ -106,4 +106,8 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
 
 @configclass
 class OP3TeleopNewtonEnvCfg(OP3TeleopEnvCfg):
-    physics_engine = "newton"
+    def __post_init__(self) -> None:
+        raise RuntimeError(
+            "Newton support has been removed from this repository for the Isaac Lab 2.3.2 migration. "
+            "Use Isaac-OP3-Teleop-Direct-v0 with PhysX instead."
+        )

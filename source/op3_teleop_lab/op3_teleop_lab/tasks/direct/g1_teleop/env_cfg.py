@@ -83,7 +83,7 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
     teleop_dataset_path: str | None = None
     truncate_on_command_end = True
 
-    scene = InteractiveSceneCfg(num_envs=2048, env_spacing=3.0, replicate_physics=True)
+    scene = InteractiveSceneCfg(num_envs=4096, env_spacing=3.0, replicate_physics=True)
     terrain = build_default_terrain_cfg()
     sim = build_default_sim_cfg(physics_engine="physx")
 

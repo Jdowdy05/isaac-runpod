@@ -2,10 +2,11 @@
 
 External Isaac Lab project scaffold for end-to-end teleoperation policy learning on the Robotis OP3. The intended policy maps sparse human pose observations and robot state directly to OP3 joint position targets, with balance included in the task.
 
-The project is structured to work with Isaac Lab's external-project pattern and keeps two physics paths:
+The project is structured to work with Isaac Lab's external-project pattern and now targets Isaac Lab `v2.3.2`
+with Isaac Sim/PhysX only.
 
-- PhysX as the current training and playback backend.
-- Newton as an experimental path that is not safe for OP3 training until the known ground/contact failure is fixed.
+- PhysX is the training and playback backend.
+- Newton has been removed from the active workflow.
 - The OP3 task timing is fixed to a 0.002 s physics step with decimation 10, so the policy runs at 50 Hz.
 
 The current repository is a scaffold, not a finished training system. It gives you:
@@ -77,17 +78,17 @@ The current repository is a scaffold, not a finished training system. It gives y
    python scripts/rsl_rl/train.py --task Isaac-OP3-Teleop-Direct-v0 --headless
    ```
 
+   To train the Unitree G1 with stock RSL-RL PPO:
+
+   ```bash
+   python scripts/rsl_rl/train.py --task Isaac-G1-Teleop-Direct-v0 --headless
+   ```
+
    To train with RSL-RL PPO plus the online ADD adversarial discriminator:
 
    ```bash
    python scripts/rsl_rl/train_add.py --task Isaac-OP3-Teleop-Direct-v0 --headless
    ```
-
-For the experimental Newton path, use:
-
-```bash
-python scripts/rl_games/train.py --task Isaac-OP3-Teleop-Newton-Direct-v0 --headless
-```
 
 To train with ADD instead of the RL Games baseline:
 

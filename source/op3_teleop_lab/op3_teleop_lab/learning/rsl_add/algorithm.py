@@ -8,11 +8,6 @@ import torch.nn as nn
 from tensordict import TensorDict
 
 from rsl_rl.algorithms import PPO
-from rsl_rl.env import VecEnv
-from rsl_rl.extensions import resolve_rnd_config, resolve_symmetry_config
-from rsl_rl.models import MLPModel
-from rsl_rl.storage import RolloutStorage
-from rsl_rl.utils import resolve_callable, resolve_obs_groups
 
 from op3_teleop_lab.learning.add.config import ADDTrainingConfig
 from op3_teleop_lab.learning.add.networks import DifferentialDiscriminator
@@ -21,13 +16,15 @@ from op3_teleop_lab.learning.add.replay_buffer import TensorReplayBuffer
 
 
 class RslAddPPO(PPO):
-    """RSL-RL PPO with an online ADD discriminator reward model."""
+    """RSL-RL PPO with an online ADD discriminator reward model.
+
+    This implementation targets the legacy RSL-RL 3.x API shipped with
+    Isaac Lab 2.3.2.
+    """
 
     def __init__(
         self,
-        actor: MLPModel,
-        critic: MLPModel,
-        storage: RolloutStorage,
+        policy,
         *,
         add_cfg: ADDTrainingConfig,
         diff_dim: int,
@@ -40,7 +37,6 @@ class RslAddPPO(PPO):
         entropy_coef: float = 0.01,
         learning_rate: float = 0.001,
         max_grad_norm: float = 1.0,
-        optimizer: str = "adam",
         use_clipped_value_loss: bool = True,
         schedule: str = "adaptive",
         desired_kl: float = 0.01,
@@ -51,9 +47,7 @@ class RslAddPPO(PPO):
         multi_gpu_cfg: dict | None = None,
     ) -> None:
         super().__init__(
-            actor=actor,
-            critic=critic,
-            storage=storage,
+            policy=policy,
             num_learning_epochs=num_learning_epochs,
             num_mini_batches=num_mini_batches,
             clip_param=clip_param,
@@ -63,12 +57,11 @@ class RslAddPPO(PPO):
             entropy_coef=entropy_coef,
             learning_rate=learning_rate,
             max_grad_norm=max_grad_norm,
-            optimizer=optimizer,
             use_clipped_value_loss=use_clipped_value_loss,
             schedule=schedule,
             desired_kl=desired_kl,
-            normalize_advantage_per_mini_batch=normalize_advantage_per_mini_batch,
             device=device,
+            normalize_advantage_per_mini_batch=normalize_advantage_per_mini_batch,
             rnd_cfg=rnd_cfg,
             symmetry_cfg=symmetry_cfg,
             multi_gpu_cfg=multi_gpu_cfg,
@@ -88,13 +81,7 @@ class RslAddPPO(PPO):
             self.diff_dim,
             device=torch.device(self.device),
         )
-        self.diff_storage = torch.zeros(
-            storage.num_transitions_per_env,
-            storage.num_envs,
-            self.diff_dim,
-            device=self.device,
-            dtype=torch.float32,
-        )
+        self.diff_storage: torch.Tensor | None = None
 
         self.last_task_rewards: torch.Tensor | None = None
         self.last_disc_rewards: torch.Tensor | None = None
@@ -103,6 +90,16 @@ class RslAddPPO(PPO):
         self._rollout_disc_reward_sum = 0.0
         self._rollout_total_reward_sum = 0.0
         self._rollout_reward_count = 0
+
+    def init_storage(self, training_type, num_envs, num_transitions_per_env, obs, actions_shape):
+        super().init_storage(training_type, num_envs, num_transitions_per_env, obs, actions_shape)
+        self.diff_storage = torch.zeros(
+            num_transitions_per_env,
+            num_envs,
+            self.diff_dim,
+            device=self.device,
+            dtype=torch.float32,
+        )
 
     @staticmethod
     def _make_disc_optimizer(add_cfg: ADDTrainingConfig, params) -> torch.optim.Optimizer:
@@ -117,11 +114,12 @@ class RslAddPPO(PPO):
     def process_env_step(
         self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
     ) -> None:
+        if self.diff_storage is None or self.storage is None:
+            raise RuntimeError("RslAddPPO storage has not been initialized.")
         if "add_diff" not in extras:
             raise KeyError("RslAddPPO requires env extras['add_diff'] for ADD discriminator rewards.")
 
-        self.actor.update_normalization(obs)
-        self.critic.update_normalization(obs)
+        self.policy.update_normalization(obs)
         if self.rnd:
             self.rnd.update_normalization(obs)
 
@@ -149,16 +147,14 @@ class RslAddPPO(PPO):
             self.transition.rewards += self.intrinsic_rewards
 
         if "time_outs" in extras:
-            time_outs = extras["time_outs"].to(self.device)
             self.transition.rewards += self.gamma * torch.squeeze(
-                self.transition.values * time_outs.unsqueeze(1),  # type: ignore[operator]
+                self.transition.values * extras["time_outs"].unsqueeze(1).to(self.device),
                 1,
             )
 
-        self.storage.add_transition(self.transition)
+        self.storage.add_transitions(self.transition)
         self.transition.clear()
-        self.actor.reset(dones)
-        self.critic.reset(dones)
+        self.policy.reset(dones)
 
         self.last_task_rewards = task_rewards.detach()
         self.last_disc_rewards = disc_rewards.detach()
@@ -169,6 +165,9 @@ class RslAddPPO(PPO):
         self._rollout_reward_count += 1
 
     def update(self) -> dict[str, float]:
+        if self.diff_storage is None or self.storage is None:
+            raise RuntimeError("RslAddPPO storage has not been initialized.")
+
         flat_diffs = self.diff_storage[: self.storage.step].reshape(-1, self.diff_dim)
         flat_diffs = torch.nan_to_num(flat_diffs, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -281,25 +280,14 @@ class RslAddPPO(PPO):
             "disc_neg_acc": sum(neg_accs) / len(neg_accs),
         }
 
-    def train_mode(self) -> None:
-        super().train_mode()
-        self.discriminator.train()
-
-    def eval_mode(self) -> None:
-        super().eval_mode()
-        self.discriminator.eval()
-
-    def save(self) -> dict:
-        saved_dict = super().save()
-        saved_dict.update(
-            {
-                "disc_state_dict": self.discriminator.state_dict(),
-                "disc_optimizer_state_dict": self.disc_optimizer.state_dict(),
-                "diff_normalizer_state_dict": self.diff_normalizer.state_dict(),
-                "add_cfg_dict": asdict(self.add_cfg),
-                "diff_dim": self.diff_dim,
-            }
-        )
+    def get_extra_state_dict(self) -> dict:
+        saved_dict = {
+            "disc_state_dict": self.discriminator.state_dict(),
+            "disc_optimizer_state_dict": self.disc_optimizer.state_dict(),
+            "diff_normalizer_state_dict": self.diff_normalizer.state_dict(),
+            "add_cfg_dict": asdict(self.add_cfg),
+            "diff_dim": self.diff_dim,
+        }
         if self.replay_buffer.size > 0:
             saved_dict["disc_replay_buffer"] = {
                 "storage": self.replay_buffer.storage[: self.replay_buffer.size].detach().cpu(),
@@ -308,73 +296,17 @@ class RslAddPPO(PPO):
             }
         return saved_dict
 
-    def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
-        load_iteration = super().load(loaded_dict, load_cfg, strict)
-        if load_cfg is None:
-            load_cfg = {
-                "actor": True,
-                "critic": True,
-                "optimizer": True,
-                "iteration": True,
-                "rnd": True,
-                "disc": True,
-            }
-
-        if load_cfg.get("disc"):
-            if "disc_state_dict" in loaded_dict:
-                self.discriminator.load_state_dict(loaded_dict["disc_state_dict"], strict=strict)
-            if "disc_optimizer_state_dict" in loaded_dict:
-                self.disc_optimizer.load_state_dict(loaded_dict["disc_optimizer_state_dict"])
-            if "diff_normalizer_state_dict" in loaded_dict:
-                self.diff_normalizer.load_state_dict(loaded_dict["diff_normalizer_state_dict"], strict=False)
-            replay_state = loaded_dict.get("disc_replay_buffer")
-            if replay_state is not None:
-                replay_storage = replay_state["storage"].to(self.device)
-                count = min(replay_storage.shape[0], self.replay_buffer.capacity)
-                self.replay_buffer.storage[:count] = replay_storage[-count:]
-                self.replay_buffer.size = count
-                self.replay_buffer.ptr = int(replay_state.get("ptr", count % self.replay_buffer.capacity))
-        return load_iteration
-
-    @staticmethod
-    def construct_algorithm(obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> "RslAddPPO":
-        alg_class: type[RslAddPPO] = resolve_callable(cfg["algorithm"].pop("class_name"))  # type: ignore
-        actor_class: type[MLPModel] = resolve_callable(cfg["actor"].pop("class_name"))  # type: ignore
-        critic_class: type[MLPModel] = resolve_callable(cfg["critic"].pop("class_name"))  # type: ignore
-
-        default_sets = ["actor", "critic"]
-        if cfg["algorithm"].get("rnd_cfg") is not None:
-            default_sets.append("rnd_state")
-        cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
-        cfg["algorithm"] = resolve_rnd_config(cfg["algorithm"], obs, cfg["obs_groups"], env)
-        cfg["algorithm"] = resolve_symmetry_config(cfg["algorithm"], env)
-
-        actor = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
-        print(f"Actor Model: {actor}")
-        if cfg["algorithm"].pop("share_cnn_encoders", None):
-            cfg["critic"]["cnns"] = actor.cnns  # type: ignore[attr-defined]
-        critic = critic_class(obs, cfg["obs_groups"], "critic", 1, **cfg["critic"]).to(device)
-        print(f"Critic Model: {critic}")
-
-        storage = RolloutStorage("rl", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device)
-
-        add_cfg_raw = cfg["algorithm"].pop("add_cfg", None)
-        if add_cfg_raw is None:
-            raise ValueError("RslAddPPO requires algorithm.add_cfg in the runner configuration.")
-        if isinstance(add_cfg_raw, ADDTrainingConfig):
-            add_cfg = add_cfg_raw
-        else:
-            add_cfg = ADDTrainingConfig.from_dict(add_cfg_raw)
-        diff_dim = int(cfg["algorithm"].pop("diff_dim"))
-
-        alg = alg_class(
-            actor,
-            critic,
-            storage,
-            add_cfg=add_cfg,
-            diff_dim=diff_dim,
-            device=device,
-            **cfg["algorithm"],
-            multi_gpu_cfg=cfg["multi_gpu"],
-        )
-        return alg
+    def load_extra_state_dict(self, loaded_dict: dict, strict: bool = True) -> None:
+        if "disc_state_dict" in loaded_dict:
+            self.discriminator.load_state_dict(loaded_dict["disc_state_dict"], strict=strict)
+        if "disc_optimizer_state_dict" in loaded_dict:
+            self.disc_optimizer.load_state_dict(loaded_dict["disc_optimizer_state_dict"])
+        if "diff_normalizer_state_dict" in loaded_dict:
+            self.diff_normalizer.load_state_dict(loaded_dict["diff_normalizer_state_dict"], strict=False)
+        replay_state = loaded_dict.get("disc_replay_buffer")
+        if replay_state is not None:
+            replay_storage = replay_state["storage"].to(self.device)
+            count = min(replay_storage.shape[0], self.replay_buffer.capacity)
+            self.replay_buffer.storage[:count] = replay_storage[-count:]
+            self.replay_buffer.size = count
+            self.replay_buffer.ptr = int(replay_state.get("ptr", count % self.replay_buffer.capacity))
