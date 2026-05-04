@@ -61,6 +61,7 @@ class RslAddOnPolicyRunner(OnPolicyRunner):
             raise ValueError("RslAddOnPolicyRunner requires algorithm.add_cfg in the runner configuration.")
         add_cfg = add_cfg_raw if isinstance(add_cfg_raw, ADDTrainingConfig) else ADDTrainingConfig.from_dict(add_cfg_raw)
         diff_dim = int(self.alg_cfg.pop("diff_dim"))
+        self.alg_cfg.pop("class_name", None)
 
         alg = RslAddPPO(
             actor_critic,
