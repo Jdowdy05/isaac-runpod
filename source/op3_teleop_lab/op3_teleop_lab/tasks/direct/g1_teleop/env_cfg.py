@@ -18,6 +18,7 @@ from op3_teleop_lab.tasks.direct.humanoid_teleop.env_cfg import (
     compute_action_dim,
     compute_actor_obs_dim,
     compute_critic_obs_dim,
+    resolve_disable_env_add_diff_reward,
     resolve_teleop_dataset_path,
     resolve_teleop_mode,
 )
@@ -46,7 +47,9 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
     physics_engine = "physx"
     actor_history_steps = ACTOR_HISTORY_STEPS
 
-    action_clip = 100.0
+    action_clip = 1.0
+    action_scale = 0.25
+    raw_action_penalty_threshold = 1.0
     joint_vel_scale = 0.05
     root_lin_acc_scale = 0.05
     action_rate_weight = 0.08
@@ -102,6 +105,8 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
             super_post_init()
         self.teleop_mode = resolve_teleop_mode(self.teleop_mode)
         self.teleop_dataset_path = resolve_teleop_dataset_path(self.teleop_dataset_path)
+        if resolve_disable_env_add_diff_reward():
+            self.add_diff_reward_weight = 0.0
         self.decimation = POLICY_DECIMATION
         self.sim = build_default_sim_cfg(self.physics_engine)
         self.contact_sensor = build_contact_sensor_cfg(self.profile)

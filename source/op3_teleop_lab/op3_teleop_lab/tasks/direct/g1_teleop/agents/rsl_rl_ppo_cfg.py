@@ -23,9 +23,9 @@ class G1TeleopPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 500
     experiment_name = "g1_teleop_rsl_rl"
     obs_groups = {"policy": ["policy"], "critic": ["critic"]}
-    clip_actions = 100.0
+    clip_actions = 1.0
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
+        init_noise_std=0.001,
         noise_std_type="scalar",
         actor_obs_normalization=False,
         critic_obs_normalization=False,

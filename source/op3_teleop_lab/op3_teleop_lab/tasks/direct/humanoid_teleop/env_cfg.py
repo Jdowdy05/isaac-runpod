@@ -43,6 +43,16 @@ def resolve_teleop_dataset_path(default_path: str | None) -> str | None:
     return os.environ.get("HUMANOID_TELEOP_DATASET_PATH", os.environ.get("OP3_TELEOP_DATASET_PATH", default_path))
 
 
+def resolve_disable_env_add_diff_reward(default: bool = False) -> bool:
+    value = os.environ.get(
+        "HUMANOID_DISABLE_ADD_DIFF_REWARD",
+        os.environ.get("OP3_DISABLE_ADD_DIFF_REWARD"),
+    )
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def build_default_terrain_cfg() -> TerrainImporterCfg:
     return TerrainImporterCfg(
         prim_path="/World/ground",

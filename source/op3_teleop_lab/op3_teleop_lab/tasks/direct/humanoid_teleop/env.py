@@ -123,6 +123,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
         )
 
         self.raw_actions = torch.zeros(self.num_envs, len(self._joint_ids), dtype=torch.float32, device=self.device)
+        self.unclipped_actions = torch.zeros_like(self.raw_actions)
         self.actions = torch.zeros_like(self.raw_actions)
         self.prev_actions = torch.zeros_like(self.actions)
         self.position_targets = self._default_joint_pos.clone()
@@ -231,6 +232,12 @@ class HumanoidTeleopEnv(DirectRLEnv):
         return lower, upper
 
     def _compute_action_scales(self) -> tuple[torch.Tensor, torch.Tensor]:
+        fixed_scale = getattr(self.cfg, "action_scale", None)
+        if fixed_scale is not None:
+            scale = torch.full_like(self._default_joint_pos, float(fixed_scale))
+            min_scale = torch.full_like(scale, 1.0e-6)
+            scale = torch.maximum(scale, min_scale)
+            return scale, scale
         scale_pos = self._joint_upper.unsqueeze(0) - self._default_joint_pos
         scale_neg = self._default_joint_pos - self._joint_lower.unsqueeze(0)
         min_scale = torch.full_like(scale_pos, 1.0e-6)
@@ -471,6 +478,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
             self._apply_torque_limit_curriculum()
         self.prev_actions.copy_(self.actions)
         action_clip = float(getattr(self.cfg, "action_clip", 100.0))
+        self.unclipped_actions.copy_(actions)
         self.raw_actions = torch.clamp(actions, -action_clip, action_clip)
         self.position_targets = self._actions_to_position_targets(self.raw_actions)
         self.actions = self._position_targets_to_normalized_actions(self.position_targets)
@@ -562,7 +570,11 @@ class HumanoidTeleopEnv(DirectRLEnv):
         foot_slip_penalty = torch.sum(foot_contact * foot_planar_speed.square(), dim=-1)
 
         action_rate_penalty = torch.sum((self.actions - self.prev_actions).square(), dim=-1)
-        raw_action_excess_penalty = torch.sum(torch.relu(torch.abs(self.raw_actions) - 1.0).square(), dim=-1)
+        raw_action_threshold = float(getattr(self.cfg, "raw_action_penalty_threshold", 1.0))
+        raw_action_excess_penalty = torch.sum(
+            torch.relu(torch.abs(self.unclipped_actions) - raw_action_threshold).square(),
+            dim=-1,
+        )
         joint_pos = self._select_joint_columns(self.robot.data.joint_pos)
         joint_vel = self._select_joint_columns(self.robot.data.joint_vel)
         energy_penalty = torch.sum((self.actions * joint_vel).square(), dim=-1)

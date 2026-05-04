@@ -38,6 +38,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--max_iterations", type=int)
     parser.add_argument("--teleop_mode", choices=("synthetic", "dataset"), default=None)
     parser.add_argument("--teleop_dataset_path", default=None)
+    parser.add_argument("--disable_env_add_diff_reward", action="store_true")
     return parser.parse_known_args()
 
 
@@ -61,6 +62,9 @@ def main() -> None:
     if args.teleop_dataset_path:
         env["HUMANOID_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
         env["OP3_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
+    if args.disable_env_add_diff_reward:
+        env["HUMANOID_DISABLE_ADD_DIFF_REWARD"] = "1"
+        env["OP3_DISABLE_ADD_DIFF_REWARD"] = "1"
 
     bootstrap = (
         "import runpy, sys; "

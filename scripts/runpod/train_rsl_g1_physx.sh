@@ -25,6 +25,7 @@ ARGS=(
   --task Isaac-G1-Teleop-Direct-v0
   --num_envs "${NUM_ENVS}"
   --teleop_mode "${TELEOP_MODE}"
+  --disable_env_add_diff_reward
   --headless
 )
 
