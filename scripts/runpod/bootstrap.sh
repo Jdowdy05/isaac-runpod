@@ -47,8 +47,12 @@ else
 fi
 
 resolve_python_cmd "${ISAACLAB_ROOT}"
-"${PYTHON_CMD[@]}" -m pip install --upgrade pip setuptools wheel
-"${PYTHON_CMD[@]}" -m pip install --upgrade numpy pyyaml "huggingface_hub[cli]"
+"${PYTHON_CMD[@]}" -m pip install --upgrade \
+  "numpy<2" \
+  "packaging<24" \
+  "pyyaml>=6,<7" \
+  "huggingface_hub==0.36.0" \
+  "click<8.3"
 "${PYTHON_CMD[@]}" -m pip install -e "${PROJECT_ROOT}/source/op3_teleop_lab"
 
 echo

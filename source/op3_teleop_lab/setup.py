@@ -8,7 +8,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
-        "numpy>=1.24",
+        "numpy>=1.24,<2",
         "torch>=2.2",
         "gymnasium>=0.29",
         "pyyaml>=6.0",
