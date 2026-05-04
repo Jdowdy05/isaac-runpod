@@ -53,6 +53,20 @@ resolve_python_cmd "${ISAACLAB_ROOT}"
   "pyyaml>=6,<7" \
   "huggingface_hub==0.36.0" \
   "click<8.3"
+
+TORCH_VENDOR_STRUCTURES="${ISAACLAB_ROOT}/_isaac_sim/exts/omni.isaac.ml_archive/pip_prebundle/torch/_vendor/packaging/_structures.py"
+PACKAGING_STRUCTURES="$("${PYTHON_CMD[@]}" - <<'PY'
+import os
+import packaging
+
+print(os.path.join(os.path.dirname(packaging.__file__), "_structures.py"))
+PY
+)"
+if [[ -f "${PACKAGING_STRUCTURES}" && ( ! -e "${TORCH_VENDOR_STRUCTURES}" || ( -L "${TORCH_VENDOR_STRUCTURES}" && ! -e "${TORCH_VENDOR_STRUCTURES}" ) ) ]]; then
+  cp --remove-destination "${PACKAGING_STRUCTURES}" "${TORCH_VENDOR_STRUCTURES}"
+  echo "Repaired broken torch vendor packaging module: ${TORCH_VENDOR_STRUCTURES}"
+fi
+
 "${PYTHON_CMD[@]}" -m pip install -e "${PROJECT_ROOT}/source/op3_teleop_lab"
 
 echo
