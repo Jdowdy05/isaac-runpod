@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from importlib import metadata
 from pathlib import Path
 
 _STATE_CONNECTIONS = (
@@ -233,7 +232,7 @@ def create_rsl_runner(
     checkpoint_dir: Path,
     device: str | None = None,
 ):
-    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
+    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
     from op3_teleop_lab.learning.add.config import ADDTrainingConfig
     from op3_teleop_lab.learning.rsl_add import RslAddOnPolicyRunner
     from op3_teleop_lab.tasks.task_registry import make_rsl_runner_cfg_for_task, resolve_add_config_path_for_task
@@ -242,7 +241,6 @@ def create_rsl_runner(
     runner_cfg_obj = make_rsl_runner_cfg_for_task(task_name)
     if device is not None:
         runner_cfg_obj.device = device
-    runner_cfg_obj = handle_deprecated_rsl_rl_cfg(runner_cfg_obj, metadata.version("rsl-rl-lib"))
     wrapped_env = RslRlVecEnvWrapper(env, clip_actions=runner_cfg_obj.clip_actions)
     runner_cfg = runner_cfg_obj.to_dict()
 
