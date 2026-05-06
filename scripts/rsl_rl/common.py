@@ -69,6 +69,17 @@ def policy_obs_tensor(obs):
     return obs[first_key]
 
 
+def infer_policy_actions(policy, obs, *, sample_actions: bool = False):
+    try:
+        return policy(obs, stochastic_output=sample_actions)
+    except TypeError:
+        if sample_actions:
+            actor_critic = getattr(policy, "__self__", None)
+            if actor_critic is not None and hasattr(actor_critic, "act"):
+                return actor_critic.act(obs)
+        return policy(obs)
+
+
 def frame_to_uint8(frame):
     import numpy as np
 

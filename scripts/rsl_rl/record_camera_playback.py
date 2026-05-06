@@ -14,6 +14,7 @@ from common import (
     format_action_stats,
     format_joint_target_debug,
     frame_to_uint8,
+    infer_policy_actions,
     policy_obs_tensor,
 )
 
@@ -144,7 +145,7 @@ def main() -> None:
         frames_dir = Path(tmp_dir)
         with torch.no_grad():
             for step in range(args.steps):
-                actions = policy(obs, stochastic_output=args.sample_actions)
+                actions = infer_policy_actions(policy, obs, sample_actions=args.sample_actions)
 
                 if args.print_stats_every > 0 and step % args.print_stats_every == 0:
                     obs_tensor = policy_obs_tensor(obs)
