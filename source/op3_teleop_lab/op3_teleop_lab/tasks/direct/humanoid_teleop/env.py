@@ -94,6 +94,12 @@ class HumanoidTeleopEnv(DirectRLEnv):
         self._contact_segments = tuple(self.cfg.profile.contact_segment_names)
         self._contact_body_ids = self._resolve_contact_body_ids()
         self._contact_sensor_body_ids = self._resolve_contact_sensor_body_ids()
+        self._termination_contact_sensor_body_ids = self._resolve_termination_contact_sensor_body_ids()
+        self._tracked_segment_indices = torch.tensor(
+            [SEGMENT_INDEX[name] for name in TRACKED_SEGMENTS],
+            dtype=torch.long,
+            device=self.device,
+        )
         self._foot_contact_feature_ids = torch.tensor(
             [
                 self._contact_segments.index("left_foot"),
@@ -145,6 +151,10 @@ class HumanoidTeleopEnv(DirectRLEnv):
             dataset_path=self.cfg.teleop_dataset_path,
         )
         self.teleop_command = self.command_generator.step()
+        self._previous_command_positions = self.teleop_command.positions.clone()
+        self._previous_command_position_valid = self.teleop_command.position_valid.clone()
+        self._foot_air_time = torch.zeros((self.num_envs, 2), dtype=torch.float32, device=self.device)
+        self._previous_foot_contact = torch.zeros((self.num_envs, 2), dtype=torch.bool, device=self.device)
         self._last_add_diff = self._compute_add_differential().clone()
         self._have_valid_transition_add_diff = False
         if self._torque_curriculum_enabled:
@@ -178,6 +188,18 @@ class HumanoidTeleopEnv(DirectRLEnv):
         if len(ids) != len(body_names):
             raise ValueError(
                 "Could not resolve all articulation contact bodies. "
+                f"Expected {tuple(body_names)}, resolved {tuple(resolved_names)}."
+            )
+        return torch.tensor(ids, dtype=torch.long, device=self.device)
+
+    def _resolve_termination_contact_sensor_body_ids(self) -> torch.Tensor:
+        body_names = list(getattr(self.cfg.profile, "termination_contact_body_names", ()))
+        if not body_names:
+            return torch.empty(0, dtype=torch.long, device=self.device)
+        ids, resolved_names = self.contact_sensor.find_bodies(body_names, preserve_order=True)
+        if len(ids) != len(body_names):
+            raise ValueError(
+                "Could not resolve all termination contact-sensor bodies. "
                 f"Expected {tuple(body_names)}, resolved {tuple(resolved_names)}."
             )
         return torch.tensor(ids, dtype=torch.long, device=self.device)
@@ -410,6 +432,39 @@ class HumanoidTeleopEnv(DirectRLEnv):
         contact_time = self._as_torch(current_contact_time)
         return torch.index_select(contact_time, dim=1, index=self._contact_sensor_body_ids)
 
+    def _get_contact_air_times(self) -> torch.Tensor:
+        current_air_time = getattr(self.contact_sensor.data, "current_air_time", None)
+        if current_air_time is None:
+            return self._foot_air_time
+        air_time = self._as_torch(current_air_time)
+        return torch.index_select(air_time, dim=1, index=self._contact_sensor_body_ids)
+
+    def _get_termination_contact_flags(self) -> torch.Tensor:
+        if self._termination_contact_sensor_body_ids.numel() == 0:
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        current_contact_time = self.contact_sensor.data.current_contact_time
+        if current_contact_time is None:
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        contact_time = self._as_torch(current_contact_time)
+        termination_contact_time = torch.index_select(contact_time, dim=1, index=self._termination_contact_sensor_body_ids)
+        return torch.any(termination_contact_time > 0.0, dim=1)
+
+    def _get_joint_efforts(self) -> torch.Tensor | None:
+        for attr_name in (
+            "applied_torque",
+            "applied_torques",
+            "computed_torque",
+            "computed_torques",
+            "joint_torque",
+            "joint_torques",
+            "joint_effort",
+            "joint_efforts",
+        ):
+            tensor = getattr(self.robot.data, attr_name, None)
+            if tensor is not None:
+                return self._select_joint_columns(tensor)
+        return None
+
     def _compute_contact_features(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         body_pos_w = self._as_torch(self.robot.data.body_pos_w)
         body_vel_w = self._get_body_linear_velocity_w()
@@ -465,6 +520,29 @@ class HumanoidTeleopEnv(DirectRLEnv):
         pos_valid_flat = self.teleop_command.position_valid.float().reshape(self.num_envs, -1)
         return torch.cat((pos_diff.reshape(self.num_envs, -1), target_positions.reshape(self.num_envs, -1), pos_valid_flat), dim=-1)
 
+    def _compute_target_segment_velocities(self) -> tuple[torch.Tensor, torch.Tensor]:
+        dt = float(self.cfg.sim.dt * self.cfg.decimation)
+        if dt <= 0.0:
+            raise ValueError("Control dt must be positive to compute target segment velocities.")
+        valid = self.teleop_command.position_valid & self._previous_command_position_valid
+        delta = self.teleop_command.positions - self._previous_command_positions
+        velocities = torch.where(valid.unsqueeze(-1), delta / dt, torch.zeros_like(delta))
+        return velocities, valid.float()
+
+    def _compute_current_segment_velocities_local(self) -> torch.Tensor:
+        root_quat = quat_normalize(self._as_torch(self.robot.data.root_quat_w))
+        root_quat_inv = quat_conjugate(root_quat)
+        root_lin_vel_w = self._as_torch(self.robot.data.root_lin_vel_w)
+        body_vel_w = self._get_body_linear_velocity_w()
+        current_vel_rel = []
+        for segment_name in TRACKED_SEGMENTS:
+            if segment_name == "pelvis":
+                current_vel_rel.append(torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device))
+                continue
+            body_id = self._body_ids[segment_name]
+            current_vel_rel.append(quat_apply(root_quat_inv, body_vel_w[:, body_id] - root_lin_vel_w))
+        return torch.stack(current_vel_rel, dim=1)
+
     def _build_critic_obs(self, actor_obs: torch.Tensor) -> torch.Tensor:
         root_lin_vel_b = self._get_root_linear_velocity_b()
         root_height = self._as_torch(self.robot.data.root_pos_w)[:, 2:3]
@@ -492,6 +570,8 @@ class HumanoidTeleopEnv(DirectRLEnv):
         task_reward = getattr(self, "reward_buf", torch.zeros(self.num_envs, dtype=torch.float32, device=self.device))
         transition_add_diff = self._last_add_diff.clone()
         needs_fresh_add_diff = not self._have_valid_transition_add_diff
+        self._previous_command_positions.copy_(self.teleop_command.positions)
+        self._previous_command_position_valid.copy_(self.teleop_command.position_valid)
         self.teleop_command = self.command_generator.step()
         actor_frame = self._build_actor_frame()
         actor_obs = self._update_actor_history(actor_frame)
@@ -520,6 +600,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
 
         pose_pos_reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         pose_rot_reward = torch.zeros_like(pose_pos_reward)
+        foot_orientation_reward = torch.zeros_like(pose_pos_reward)
         add_diff_sq_sum = torch.zeros_like(pose_pos_reward)
         add_diff_dim_count = torch.zeros_like(pose_pos_reward)
 
@@ -545,6 +626,10 @@ class HumanoidTeleopEnv(DirectRLEnv):
             quat_alignment = torch.abs(torch.sum(current_quat * target_quat, dim=-1))
             quat_error = 1.0 - torch.clamp(quat_alignment, 0.0, 1.0)
             pose_rot_reward += rot_valid * torch.exp(-self.cfg.body_orientation_sigma * quat_error.square())
+            if segment_name in {"left_foot", "right_foot"}:
+                foot_orientation_reward += rot_valid * torch.exp(
+                    -float(getattr(self.cfg, "foot_orientation_sigma", self.cfg.body_orientation_sigma)) * quat_error.square()
+                )
             target_rot = quaternion_to_tangent_and_normal(target_quat)
             current_rot = quaternion_to_tangent_and_normal(current_quat)
             add_diff_sq_sum += rot_valid * torch.sum((target_rot - current_rot).square(), dim=-1)
@@ -553,6 +638,18 @@ class HumanoidTeleopEnv(DirectRLEnv):
         add_diff_mse = add_diff_sq_sum / torch.clamp(add_diff_dim_count, min=1.0)
         add_diff_reward = torch.exp(-self.cfg.add_diff_reward_sigma * add_diff_mse)
         add_diff_reward = add_diff_reward * (add_diff_dim_count > 0.0).float()
+        foot_orientation_reward = 0.5 * foot_orientation_reward
+
+        target_segment_vel, target_segment_vel_valid = self._compute_target_segment_velocities()
+        current_segment_vel = self._compute_current_segment_velocities_local()
+        target_segment_vel_error = torch.linalg.norm(current_segment_vel - target_segment_vel, dim=-1)
+        body_vel_reward_per_segment = torch.exp(
+            -float(getattr(self.cfg, "body_velocity_sigma", self.cfg.pose_tracking_sigma)) * target_segment_vel_error.square()
+        )
+        body_vel_reward = (
+            torch.sum(target_segment_vel_valid * body_vel_reward_per_segment, dim=-1)
+            / torch.clamp(torch.sum(target_segment_vel_valid, dim=-1), min=1.0)
+        )
 
         projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
         upright_reward = torch.clamp((-projected_gravity[:, 2]), min=0.0, max=1.0)
@@ -568,6 +665,24 @@ class HumanoidTeleopEnv(DirectRLEnv):
         foot_vel_w = torch.index_select(body_vel_w, dim=1, index=self._foot_body_ids)
         foot_planar_speed = torch.linalg.norm(foot_vel_w[..., :2], dim=-1)
         foot_slip_penalty = torch.sum(foot_contact * foot_planar_speed.square(), dim=-1)
+        control_dt = float(self.cfg.sim.dt * self.cfg.decimation)
+        foot_contact_bool = foot_contact > 0.5
+        first_foot_contact = (~self._previous_foot_contact) & foot_contact_bool
+        target_foot_z = self.teleop_command.positions[:, [SEGMENT_INDEX["left_foot"], SEGMENT_INDEX["right_foot"]], 2]
+        support_foot_z = torch.min(target_foot_z, dim=-1, keepdim=True).values
+        commanded_swing = (target_foot_z - support_foot_z) > float(getattr(self.cfg, "foot_air_time_height_threshold", 0.04))
+        foot_air_time_reward = torch.sum(
+            first_foot_contact.float()
+            * commanded_swing.float()
+            * torch.clamp(self._foot_air_time - float(getattr(self.cfg, "foot_air_time_min_duration", 0.10)), min=0.0),
+            dim=-1,
+        )
+        self._foot_air_time = torch.where(
+            foot_contact_bool,
+            torch.zeros_like(self._foot_air_time),
+            self._foot_air_time + control_dt,
+        )
+        self._previous_foot_contact.copy_(foot_contact_bool)
 
         action_rate_penalty = torch.sum((self.actions - self.prev_actions).square(), dim=-1)
         raw_action_threshold = float(getattr(self.cfg, "raw_action_penalty_threshold", 1.0))
@@ -583,12 +698,29 @@ class HumanoidTeleopEnv(DirectRLEnv):
             (joint_pos <= self._joint_lower + 1.0e-3) | (joint_pos >= self._joint_upper - 1.0e-3),
             dim=-1,
         ).float()
+        joint_efforts = self._get_joint_efforts()
+        if joint_efforts is None:
+            torque_penalty = torch.zeros_like(pose_pos_reward)
+            torque_limit_penalty = torch.zeros_like(pose_pos_reward)
+        else:
+            torque_penalty = torch.sum(joint_efforts.square(), dim=-1)
+            if self._nominal_joint_effort_limits_sim is None:
+                torque_limit_penalty = torch.zeros_like(pose_pos_reward)
+            else:
+                torque_limit_scale = self._current_torque_scale() if self._torque_curriculum_enabled else 1.0
+                torque_limits = torch.clamp(self._nominal_joint_effort_limits_sim * torque_limit_scale, min=1.0e-6)
+                torque_ratio = torch.abs(joint_efforts) / torque_limits.unsqueeze(0)
+                soft_limit = float(getattr(self.cfg, "soft_torque_limit", 0.85))
+                torque_limit_penalty = torch.sum(torch.relu(torque_ratio - soft_limit).square(), dim=-1)
 
         rewards = (
             self.cfg.alive_reward
             + self.cfg.pose_pos_weight * pose_pos_reward
             + self.cfg.pose_rot_weight * pose_rot_reward
             + self.cfg.add_diff_reward_weight * add_diff_reward
+            + float(getattr(self.cfg, "body_velocity_weight", 0.0)) * body_vel_reward
+            + float(getattr(self.cfg, "foot_air_time_reward_weight", 0.0)) * foot_air_time_reward
+            + float(getattr(self.cfg, "foot_orientation_weight", 0.0)) * foot_orientation_reward
             + self.cfg.upright_weight * upright_reward
             + self.cfg.root_height_weight * root_height_reward
             - self.cfg.termination_penalty * termination_penalty_mask
@@ -598,13 +730,21 @@ class HumanoidTeleopEnv(DirectRLEnv):
             - self.cfg.foot_slip_weight * foot_slip_penalty
             - self.cfg.root_acc_weight * root_acc_penalty
             - self.cfg.joint_limit_weight * joint_limit_penalty
+            - float(getattr(self.cfg, "torque_penalty_weight", 0.0)) * torque_penalty
+            - float(getattr(self.cfg, "torque_limit_penalty_weight", 0.0)) * torque_limit_penalty
         )
         self._last_reward_terms = {
             "reward/add_diff": add_diff_reward.detach().mean(),
             "reward/pose_pos": pose_pos_reward.detach().mean(),
             "reward/pose_rot": pose_rot_reward.detach().mean(),
+            "reward/body_vel": body_vel_reward.detach().mean(),
+            "reward/foot_air_time": foot_air_time_reward.detach().mean(),
+            "reward/foot_orientation": foot_orientation_reward.detach().mean(),
             "penalty/termination": (self.cfg.termination_penalty * termination_penalty_mask).detach().mean(),
             "penalty/raw_action_excess": raw_action_excess_penalty.detach().mean(),
+            "penalty/foot_slip": foot_slip_penalty.detach().mean(),
+            "penalty/torque": torque_penalty.detach().mean(),
+            "penalty/torque_limit": torque_limit_penalty.detach().mean(),
         }
         self._last_add_diff = self._compute_add_differential()
         self._have_valid_transition_add_diff = True
@@ -614,7 +754,10 @@ class HumanoidTeleopEnv(DirectRLEnv):
         if projected_gravity is None:
             projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
         tilt_angle = torch.acos(torch.clamp(-projected_gravity[:, 2], -1.0, 1.0)).abs()
-        return tilt_angle > self.cfg.termination_tilt_angle
+        root_height = self._as_torch(self.robot.data.root_pos_w)[:, 2]
+        low_height = root_height < float(getattr(self.cfg.profile, "termination_height", 0.0))
+        forbidden_contact = self._get_termination_contact_flags()
+        return (tilt_angle > self.cfg.termination_tilt_angle) | low_height | forbidden_contact
 
     def _compute_time_out_mask(self) -> torch.Tensor:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
@@ -674,6 +817,10 @@ class HumanoidTeleopEnv(DirectRLEnv):
         self.fixed_position_targets[env_ids] = fixed_joint_pos
         self._actor_history[env_ids] = 0.0
         self.command_generator.reset(env_ids)
+        self._previous_command_positions[env_ids] = self.teleop_command.positions[env_ids]
+        self._previous_command_position_valid[env_ids] = self.teleop_command.position_valid[env_ids]
+        self._foot_air_time[env_ids] = 0.0
+        self._previous_foot_contact[env_ids] = False
 
     def _randomize_joint_gains(self, env_ids: torch.Tensor) -> None:
         if self._default_joint_stiffness is None or self._default_joint_damping is None:

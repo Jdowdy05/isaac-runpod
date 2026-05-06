@@ -24,6 +24,7 @@ class SparseHumanoidRobotProfile:
     contact_segment_to_body_name: dict[str, str] = field(default_factory=dict)
     excluded_action_joint_names: tuple[str, ...] = ()
     contact_segment_names: tuple[str, ...] = CONTACT_SEGMENT_NAMES
+    termination_contact_body_names: tuple[str, ...] = ()
     termination_height: float = 0.14
     max_root_tilt_cos: float = 0.55
 
@@ -46,7 +47,9 @@ class SparseHumanoidRobotProfile:
         return tuple(self.contact_body_name_for(name) for name in self.contact_segment_names)
 
     def contact_sensor_body_regex(self) -> str:
-        return "|".join(re.escape(name) for name in self.contact_body_names())
+        sensor_body_names = set(self.contact_body_names())
+        sensor_body_names.update(self.termination_contact_body_names)
+        return "|".join(re.escape(name) for name in sorted(sensor_body_names))
 
 
 def get_action_joint_names(profile: SparseHumanoidRobotProfile) -> tuple[str, ...]:

@@ -50,7 +50,22 @@ def make_default_g1_profile() -> SparseHumanoidRobotProfile:
             "left_hand": "left_wrist_yaw_link",
             "right_hand": "right_wrist_yaw_link",
         },
-        excluded_action_joint_names=(),
+        excluded_action_joint_names=(
+            "left_wrist_roll_joint",
+            "right_wrist_roll_joint",
+            "left_wrist_pitch_joint",
+            "right_wrist_pitch_joint",
+            "left_wrist_yaw_joint",
+            "right_wrist_yaw_joint",
+        ),
+        termination_contact_body_names=(
+            "pelvis",
+            "torso_link",
+            "left_knee_link",
+            "right_knee_link",
+            "left_shoulder_roll_link",
+            "right_shoulder_roll_link",
+        ),
         termination_height=0.40,
         max_root_tilt_cos=0.55,
     )
