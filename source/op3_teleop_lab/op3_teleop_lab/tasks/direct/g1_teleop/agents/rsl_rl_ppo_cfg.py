@@ -25,7 +25,7 @@ class G1TeleopPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     obs_groups = {"policy": ["policy"], "critic": ["critic"]}
     clip_actions = 1.0
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=0.001,
+        init_noise_std=0.05,
         noise_std_type="scalar",
         actor_obs_normalization=False,
         critic_obs_normalization=False,
