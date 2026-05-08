@@ -7,6 +7,11 @@ from torch import nn
 from torch.distributions import Normal
 
 
+def _atanh(value: torch.Tensor, eps: float = 1.0e-6) -> torch.Tensor:
+    clipped = torch.clamp(value, min=-1.0 + eps, max=1.0 - eps)
+    return 0.5 * (torch.log1p(clipped) - torch.log1p(-clipped))
+
+
 def build_mlp(
     input_dim: int,
     hidden_dims: Sequence[int],
@@ -61,7 +66,7 @@ class DeterministicTeacherPolicy(nn.Module):
         return self.mean_net(obs)
 
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
-        return self._mean_logits(obs)
+        return torch.tanh(self._mean_logits(obs))
 
     def distribution(self, obs: torch.Tensor) -> Normal:
         mean_logits = self._mean_logits(obs)
@@ -70,13 +75,18 @@ class DeterministicTeacherPolicy(nn.Module):
 
     def sample(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
-        action = dist.rsample()
-        log_prob = dist.log_prob(action).sum(dim=-1)
+        pre_tanh = dist.rsample()
+        action = torch.tanh(pre_tanh)
+        log_prob = dist.log_prob(pre_tanh).sum(dim=-1)
+        log_prob = log_prob - torch.log(torch.clamp(1.0 - action.square(), min=1.0e-6)).sum(dim=-1)
         return action, log_prob
 
     def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
-        log_prob = dist.log_prob(actions).sum(dim=-1)
+        clipped_actions = torch.clamp(actions, min=-1.0 + 1.0e-6, max=1.0 - 1.0e-6)
+        pre_tanh = _atanh(clipped_actions)
+        log_prob = dist.log_prob(pre_tanh).sum(dim=-1)
+        log_prob = log_prob - torch.log(torch.clamp(1.0 - clipped_actions.square(), min=1.0e-6)).sum(dim=-1)
         entropy = dist.entropy().sum(dim=-1)
         return log_prob, entropy
 
@@ -116,7 +126,7 @@ class TemporalStudentPolicy(nn.Module):
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         features = self._encode(obs)
-        return self.head(features)
+        return torch.tanh(self.head(features))
 
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
         return self.forward(obs)

@@ -7,6 +7,7 @@ import gymnasium as gym
 
 _RL_GAMES_CFG = "op3_teleop_lab.tasks.direct.g1_teleop.agents:rl_games_ppo_cfg.yaml"
 _RSL_RL_CFG = "op3_teleop_lab.tasks.direct.g1_teleop.agents.rsl_rl_ppo_cfg:G1TeleopPPORunnerCfg"
+_TEACHER_STUDENT_CFG = "op3_teleop_lab.tasks.direct.g1_teleop.agents:teacher_student_ppo_cfg.yaml"
 
 
 gym.register(
@@ -17,6 +18,7 @@ gym.register(
         "env_cfg_entry_point": "op3_teleop_lab.tasks.direct.g1_teleop.env_cfg:G1TeleopEnvCfg",
         "rl_games_cfg_entry_point": _RL_GAMES_CFG,
         "rsl_rl_cfg_entry_point": _RSL_RL_CFG,
+        "teacher_student_cfg_entry_point": _TEACHER_STUDENT_CFG,
         "task_slug": "g1_teleop",
     },
 )

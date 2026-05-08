@@ -1,0 +1,45 @@
+seed: 1
+
+teacher_hidden_dims: [512, 256, 128]
+student_hidden_dims: [512, 256]
+critic_hidden_dims: [512, 256, 128]
+activation: elu
+teacher_output_init_scale: 0.1
+student_output_init_scale: 0.1
+teacher_exploration_std: 0.05
+teacher_exploration_final_std: 0.01
+teacher_exploration_decay_iterations: 50000
+teacher_uses_critic_obs: true
+student_rnn_hidden_dim: 256
+
+rollout_steps: 24
+teacher_max_iterations: 200000
+student_max_iterations: 50000
+teacher_epochs: 5
+critic_epochs: 5
+student_epochs: 5
+minibatch_size: 16384
+student_batch_size: 16384
+
+discount: 0.99
+gae_lambda: 0.95
+ppo_clip_ratio: 0.2
+value_loss_coef: 1.0
+entropy_coef: 0.005
+max_grad_norm: 0.2
+student_bc_weight: 1.0
+
+teacher_optimizer:
+  type: adam
+  learning_rate: 1.0e-3
+
+student_optimizer:
+  type: adam
+  learning_rate: 3.0e-4
+
+critic_optimizer:
+  type: adam
+  learning_rate: 1.0e-3
+
+save_interval: 500
+log_interval: 10

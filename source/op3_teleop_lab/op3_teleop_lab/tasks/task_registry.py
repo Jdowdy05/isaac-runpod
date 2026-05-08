@@ -12,6 +12,7 @@ class TeleopTaskSpec:
     rsl_rl_cfg_entry_point: str | None = None
     rl_games_cfg_entry_point: str | None = None
     add_cfg_entry_point: str | None = None
+    teacher_student_cfg_entry_point: str | None = None
     task_slug: str | None = None
 
 
@@ -46,6 +47,7 @@ def get_task_spec(task_name: str) -> TeleopTaskSpec:
         rsl_rl_cfg_entry_point=kwargs.get("rsl_rl_cfg_entry_point"),
         rl_games_cfg_entry_point=kwargs.get("rl_games_cfg_entry_point"),
         add_cfg_entry_point=kwargs.get("add_cfg_entry_point"),
+        teacher_student_cfg_entry_point=kwargs.get("teacher_student_cfg_entry_point"),
         task_slug=kwargs.get("task_slug"),
     )
 
@@ -67,6 +69,13 @@ def resolve_add_config_path_for_task(task_name: str) -> str:
     entry_point = get_task_spec(task_name).add_cfg_entry_point
     if entry_point is None:
         raise ValueError(f"Task {task_name!r} does not define an ADD config entry point.")
+    return resolve_resource_entry_point(entry_point)
+
+
+def resolve_teacher_student_config_path_for_task(task_name: str) -> str:
+    entry_point = get_task_spec(task_name).teacher_student_cfg_entry_point
+    if entry_point is None:
+        raise ValueError(f"Task {task_name!r} does not define a teacher-student config entry point.")
     return resolve_resource_entry_point(entry_point)
 
 
