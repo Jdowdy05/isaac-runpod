@@ -46,6 +46,7 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
     episode_length_s = 20.0
     physics_engine = "physx"
     actor_history_steps = ACTOR_HISTORY_STEPS
+    enable_add_diff = False
 
     action_clip = 1.0
     action_scale = 0.25
@@ -60,7 +61,7 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
     pose_pos_weight = 1.75
     pose_rot_weight = 0.4
     body_velocity_weight = 2.0
-    add_diff_reward_weight = 1.0
+    add_diff_reward_weight = 0.0
     add_diff_reward_sigma = 4.0
     foot_air_time_reward_weight = 2.5
     foot_orientation_weight = 1.0
@@ -115,7 +116,7 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
             super_post_init()
         self.teleop_mode = resolve_teleop_mode(self.teleop_mode)
         self.teleop_dataset_path = resolve_teleop_dataset_path(self.teleop_dataset_path)
-        if resolve_disable_env_add_diff_reward():
+        if self.enable_add_diff and resolve_disable_env_add_diff_reward():
             self.add_diff_reward_weight = 0.0
         self.decimation = POLICY_DECIMATION
         self.sim = build_default_sim_cfg(self.physics_engine)

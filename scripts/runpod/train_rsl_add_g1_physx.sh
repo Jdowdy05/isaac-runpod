@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "G1 ADD training is disabled. G1 tasks now run without ADD; use scripts/runpod/train_rsl_g1_physx.sh instead." >&2
+exit 1
+
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DATASET_PATH="${HUMANOID_TELEOP_DATASET_PATH:-${OP3_TELEOP_DATASET_PATH:-${PROJECT_ROOT}/data/processed/open/teleop_sparse_pose.npz}}"
 if [[ ! -f "${DATASET_PATH}" ]]; then

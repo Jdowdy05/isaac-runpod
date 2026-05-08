@@ -36,6 +36,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     episode_length_s = 20.0
     physics_engine = "physx"
     actor_history_steps = ACTOR_HISTORY_STEPS
+    enable_add_diff = True
 
     action_clip = 100.0
     joint_vel_scale = 0.05

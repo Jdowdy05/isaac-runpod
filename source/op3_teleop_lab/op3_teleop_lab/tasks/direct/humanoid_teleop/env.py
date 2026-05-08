@@ -150,12 +150,13 @@ class HumanoidTeleopEnv(DirectRLEnv):
             mode=self.cfg.teleop_mode,
             dataset_path=self.cfg.teleop_dataset_path,
         )
+        self._add_diff_enabled = bool(getattr(self.cfg, "enable_add_diff", True))
         self.teleop_command = self.command_generator.step()
         self._previous_command_positions = self.teleop_command.positions.clone()
         self._previous_command_position_valid = self.teleop_command.position_valid.clone()
         self._foot_air_time = torch.zeros((self.num_envs, 2), dtype=torch.float32, device=self.device)
         self._previous_foot_contact = torch.zeros((self.num_envs, 2), dtype=torch.bool, device=self.device)
-        self._last_add_diff = self._compute_add_differential().clone()
+        self._last_add_diff = self._compute_add_differential().clone() if self._add_diff_enabled else None
         self._have_valid_transition_add_diff = False
         if self._torque_curriculum_enabled:
             self._apply_torque_limit_curriculum(force=True)
@@ -568,8 +569,8 @@ class HumanoidTeleopEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict[str, torch.Tensor]:
         task_reward = getattr(self, "reward_buf", torch.zeros(self.num_envs, dtype=torch.float32, device=self.device))
-        transition_add_diff = self._last_add_diff.clone()
-        needs_fresh_add_diff = not self._have_valid_transition_add_diff
+        transition_add_diff = self._last_add_diff.clone() if self._add_diff_enabled and self._last_add_diff is not None else None
+        needs_fresh_add_diff = self._add_diff_enabled and not self._have_valid_transition_add_diff
         self._previous_command_positions.copy_(self.teleop_command.positions)
         self._previous_command_position_valid.copy_(self.teleop_command.position_valid)
         self.teleop_command = self.command_generator.step()
@@ -580,9 +581,10 @@ class HumanoidTeleopEnv(DirectRLEnv):
             transition_add_diff = self._compute_add_differential()
         self._have_valid_transition_add_diff = False
         self.extras = {
-            "add_diff": transition_add_diff,
             "task_reward": task_reward.clone(),
         }
+        if transition_add_diff is not None:
+            self.extras["add_diff"] = transition_add_diff
         reward_terms = getattr(self, "_last_reward_terms", None)
         if reward_terms is not None:
             self.extras["log"] = reward_terms
@@ -601,8 +603,12 @@ class HumanoidTeleopEnv(DirectRLEnv):
         pose_pos_reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         pose_rot_reward = torch.zeros_like(pose_pos_reward)
         foot_orientation_reward = torch.zeros_like(pose_pos_reward)
-        add_diff_sq_sum = torch.zeros_like(pose_pos_reward)
-        add_diff_dim_count = torch.zeros_like(pose_pos_reward)
+        if self._add_diff_enabled:
+            add_diff_sq_sum = torch.zeros_like(pose_pos_reward)
+            add_diff_dim_count = torch.zeros_like(pose_pos_reward)
+        else:
+            add_diff_sq_sum = None
+            add_diff_dim_count = None
 
         for segment_name in TRACKED_SEGMENTS:
             body_id = self._body_ids[segment_name]
@@ -619,8 +625,9 @@ class HumanoidTeleopEnv(DirectRLEnv):
 
             pos_error = torch.linalg.norm(current_pos_rel - self.teleop_command.positions[:, seg_idx], dim=-1)
             pose_pos_reward += pos_valid * torch.exp(-self.cfg.pose_tracking_sigma * pos_error.square())
-            add_diff_sq_sum += pos_valid * pos_error.square()
-            add_diff_dim_count += pos_valid * 3.0
+            if self._add_diff_enabled:
+                add_diff_sq_sum += pos_valid * pos_error.square()
+                add_diff_dim_count += pos_valid * 3.0
 
             target_quat = quat_normalize(self.teleop_command.orientations[:, seg_idx])
             quat_alignment = torch.abs(torch.sum(current_quat * target_quat, dim=-1))
@@ -630,14 +637,18 @@ class HumanoidTeleopEnv(DirectRLEnv):
                 foot_orientation_reward += rot_valid * torch.exp(
                     -float(getattr(self.cfg, "foot_orientation_sigma", self.cfg.body_orientation_sigma)) * quat_error.square()
                 )
-            target_rot = quaternion_to_tangent_and_normal(target_quat)
-            current_rot = quaternion_to_tangent_and_normal(current_quat)
-            add_diff_sq_sum += rot_valid * torch.sum((target_rot - current_rot).square(), dim=-1)
-            add_diff_dim_count += rot_valid * 6.0
+            if self._add_diff_enabled:
+                target_rot = quaternion_to_tangent_and_normal(target_quat)
+                current_rot = quaternion_to_tangent_and_normal(current_quat)
+                add_diff_sq_sum += rot_valid * torch.sum((target_rot - current_rot).square(), dim=-1)
+                add_diff_dim_count += rot_valid * 6.0
 
-        add_diff_mse = add_diff_sq_sum / torch.clamp(add_diff_dim_count, min=1.0)
-        add_diff_reward = torch.exp(-self.cfg.add_diff_reward_sigma * add_diff_mse)
-        add_diff_reward = add_diff_reward * (add_diff_dim_count > 0.0).float()
+        if self._add_diff_enabled:
+            add_diff_mse = add_diff_sq_sum / torch.clamp(add_diff_dim_count, min=1.0)
+            add_diff_reward = torch.exp(-self.cfg.add_diff_reward_sigma * add_diff_mse)
+            add_diff_reward = add_diff_reward * (add_diff_dim_count > 0.0).float()
+        else:
+            add_diff_reward = torch.zeros_like(pose_pos_reward)
         foot_orientation_reward = 0.5 * foot_orientation_reward
 
         target_segment_vel, target_segment_vel_valid = self._compute_target_segment_velocities()
@@ -734,7 +745,6 @@ class HumanoidTeleopEnv(DirectRLEnv):
             - float(getattr(self.cfg, "torque_limit_penalty_weight", 0.0)) * torque_limit_penalty
         )
         self._last_reward_terms = {
-            "reward/add_diff": add_diff_reward.detach().mean(),
             "reward/pose_pos": pose_pos_reward.detach().mean(),
             "reward/pose_rot": pose_rot_reward.detach().mean(),
             "reward/body_vel": body_vel_reward.detach().mean(),
@@ -746,7 +756,11 @@ class HumanoidTeleopEnv(DirectRLEnv):
             "penalty/torque": torque_penalty.detach().mean(),
             "penalty/torque_limit": torque_limit_penalty.detach().mean(),
         }
-        self._last_add_diff = self._compute_add_differential()
+        if self._add_diff_enabled:
+            self._last_reward_terms["reward/add_diff"] = add_diff_reward.detach().mean()
+            self._last_add_diff = self._compute_add_differential()
+        else:
+            self._last_add_diff = None
         self._have_valid_transition_add_diff = True
         return rewards
 
