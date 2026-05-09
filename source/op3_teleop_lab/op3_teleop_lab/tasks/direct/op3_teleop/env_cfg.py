@@ -19,6 +19,7 @@ from op3_teleop_lab.tasks.direct.humanoid_teleop.env_cfg import (
     compute_critic_obs_dim,
     resolve_teleop_dataset_path,
     resolve_teleop_mode,
+    validate_reward_weight_signs,
 )
 
 from .robot_profile import make_default_op3_profile
@@ -103,6 +104,7 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
             self.action_space, self.actor_history_steps, len(self.profile.contact_segment_names)
         )
         self.state_space = 0
+        validate_reward_weight_signs(self)
 
 
 @configclass

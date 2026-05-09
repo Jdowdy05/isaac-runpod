@@ -35,6 +35,38 @@ def compute_action_dim(profile: SparseHumanoidRobotProfile) -> int:
     return len(get_action_joint_names(profile))
 
 
+def validate_reward_weight_signs(cfg) -> None:
+    reward_weights = (
+        "alive_reward",
+        "pose_pos_weight",
+        "pose_rot_weight",
+        "add_diff_reward_weight",
+        "body_velocity_weight",
+        "foot_air_time_reward_weight",
+        "foot_orientation_weight",
+        "upright_weight",
+        "root_height_weight",
+    )
+    penalty_weights = (
+        "termination_penalty",
+        "action_rate_weight",
+        "raw_action_excess_weight",
+        "energy_weight",
+        "foot_slip_weight",
+        "root_acc_weight",
+        "joint_limit_weight",
+        "torque_penalty_weight",
+        "torque_limit_penalty_weight",
+    )
+
+    for name in reward_weights:
+        if hasattr(cfg, name) and float(getattr(cfg, name)) < 0.0:
+            raise ValueError(f"{name} must be non-negative because reward assembly adds this term.")
+    for name in penalty_weights:
+        if hasattr(cfg, name) and float(getattr(cfg, name)) < 0.0:
+            raise ValueError(f"{name} must be non-negative because reward assembly subtracts this term.")
+
+
 def resolve_teleop_mode(default_mode: str) -> str:
     return os.environ.get("HUMANOID_TELEOP_MODE", os.environ.get("OP3_TELEOP_MODE", default_mode))
 

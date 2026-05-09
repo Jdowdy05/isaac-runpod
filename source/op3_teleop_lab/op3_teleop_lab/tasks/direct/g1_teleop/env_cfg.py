@@ -21,6 +21,7 @@ from op3_teleop_lab.tasks.direct.humanoid_teleop.env_cfg import (
     resolve_disable_env_add_diff_reward,
     resolve_teleop_dataset_path,
     resolve_teleop_mode,
+    validate_reward_weight_signs,
 )
 
 from .robot_profile import make_default_g1_profile
@@ -69,8 +70,8 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
     root_height_weight = 0.4
     alive_reward = 0.2
     termination_penalty = 50.0
-    joint_limit_weight = 1.0e-2
-    foot_slip_weight = 1.0e-1
+    joint_limit_weight = 5.0
+    foot_slip_weight = 1.0
     root_acc_weight = 2.0e-3
     termination_tilt_angle = 0.9
     pose_tracking_sigma = 12.0
@@ -127,3 +128,4 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
             self.action_space, self.actor_history_steps, len(self.profile.contact_segment_names)
         )
         self.state_space = 0
+        validate_reward_weight_signs(self)

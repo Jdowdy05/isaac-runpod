@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from embodiment_profiles import get_embodiment_profile
+
 
 AIST_KEYPOINTS = {
     "nose": 0,
@@ -36,7 +38,6 @@ SEGMENTS = (
     "right_foot",
 )
 SEGMENT_INDEX = {name: idx for idx, name in enumerate(SEGMENTS)}
-OP3_TARGET_BODY_SCALE_M = 0.51
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--stride", type=int, default=2, help="Subsample factor from 60 Hz.")
     parser.add_argument("--min-frames", type=int, default=60)
-    parser.add_argument("--max-root-speed", type=float, default=0.45)
+    parser.add_argument("--max-root-speed", type=float, default=None)
+    parser.add_argument("--embodiment", type=str, default="op3")
     parser.add_argument("--limit", type=int, default=None)
     return parser.parse_args()
 
@@ -162,7 +164,11 @@ def rotation_matrices_to_quats_xyzw(mats: np.ndarray) -> np.ndarray:
     return quats
 
 
-def build_sparse_sequence(keypoints3d: np.ndarray, effective_fps: float) -> tuple[np.ndarray, ...]:
+def build_sparse_sequence(
+    keypoints3d: np.ndarray,
+    effective_fps: float,
+    target_body_scale_m: float,
+) -> tuple[np.ndarray, ...]:
     num_frames = keypoints3d.shape[0]
     positions = np.zeros((num_frames, len(SEGMENTS), 3), dtype=np.float32)
     orientations = np.zeros((num_frames, len(SEGMENTS), 4), dtype=np.float32)
@@ -185,7 +191,7 @@ def build_sparse_sequence(keypoints3d: np.ndarray, effective_fps: float) -> tupl
     pelvis = 0.5 * (left_hip + right_hip)
     shoulder_center = 0.5 * (left_shoulder + right_shoulder)
     body_scale = estimate_body_scale(pelvis, nose, left_ankle, right_ankle)
-    op3_scale = np.float32(OP3_TARGET_BODY_SCALE_M / body_scale)
+    body_scale_factor = np.float32(target_body_scale_m / body_scale)
 
     raw_targets = {
         "pelvis": pelvis,
@@ -210,10 +216,10 @@ def build_sparse_sequence(keypoints3d: np.ndarray, effective_fps: float) -> tupl
 
     positions[:, SEGMENT_INDEX["pelvis"]] = 0.0
     position_valid[:, SEGMENT_INDEX["pelvis"]] = pelvis_valid
-    positions *= op3_scale
+    positions *= body_scale_factor
 
     pelvis_vel_xy = np.diff(pelvis_filled[:, :2], axis=0, prepend=pelvis_filled[:1, :2]) * effective_fps
-    target_lin_vel_xy = pelvis_vel_xy.astype(np.float32) * op3_scale
+    target_lin_vel_xy = pelvis_vel_xy.astype(np.float32) * body_scale_factor
 
     pelvis_lateral = (left_hip - right_hip) + (left_shoulder - right_shoulder)
     pelvis_up_hint = shoulder_center - pelvis
@@ -269,11 +275,13 @@ def build_sparse_sequence(keypoints3d: np.ndarray, effective_fps: float) -> tupl
 
 def main() -> None:
     args = parse_args()
+    profile = get_embodiment_profile(args.embodiment)
     keypoints_root = args.aist_root / "keypoints3d"
     if not keypoints_root.exists():
         raise FileNotFoundError(f"Expected AIST++ keypoints3d directory at: {keypoints_root}")
 
     effective_fps = 60.0 / float(args.stride)
+    max_root_speed = float(profile.aist_max_root_speed if args.max_root_speed is None else args.max_root_speed)
     ignore_set = load_ignore_set(args.aist_root)
 
     position_blocks: list[np.ndarray] = []
@@ -302,9 +310,10 @@ def main() -> None:
         positions, orientations, position_valid, rotation_valid, target_lin_vel_xy = build_sparse_sequence(
             keypoints3d,
             effective_fps=effective_fps,
+            target_body_scale_m=profile.target_body_scale_m,
         )
-        max_root_speed = float(np.linalg.norm(target_lin_vel_xy, axis=-1).max())
-        if max_root_speed > args.max_root_speed:
+        sequence_max_root_speed = float(np.linalg.norm(target_lin_vel_xy, axis=-1).max())
+        if sequence_max_root_speed > max_root_speed:
             filtered_for_speed += 1
             continue
 
@@ -333,12 +342,14 @@ def main() -> None:
         segment_names=np.asarray(SEGMENTS),
         source="AIST++ keypoints3d",
         effective_fps=effective_fps,
+        embodiment=np.asarray(profile.name, dtype=str),
     )
 
     print(f"Wrote sparse AIST dataset to: {args.output}")
     print(f"Sequences: {len(sequence_starts)}")
     print(f"Frames: {total_frames}")
     print(f"Filtered for speed: {filtered_for_speed}")
+    print(f"Embodiment: {profile.name}")
 
 
 if __name__ == "__main__":

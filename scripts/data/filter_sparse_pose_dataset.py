@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
+from embodiment_profiles import get_embodiment_profile
+
 
 DEFAULT_SEGMENTS = (
     "pelvis",
@@ -47,22 +49,23 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Filter sparse OP3 teleoperation pose clips by robot feasibility.")
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--embodiment", type=str, default="op3")
     parser.add_argument("--effective-fps", type=float, default=None)
     parser.add_argument("--clip-seconds", type=float, default=4.0)
     parser.add_argument("--filter-stride-seconds", type=float, default=4.0)
     parser.add_argument("--min-frames", type=int, default=50)
-    parser.add_argument("--max-root-speed", type=float, default=0.45)
-    parser.add_argument("--min-pelvis-height", type=float, default=0.22)
-    parser.add_argument("--max-pelvis-height", type=float, default=0.34)
-    parser.add_argument("--max-torso-lean-deg", type=float, default=35.0)
-    parser.add_argument("--min-head-height", type=float, default=0.20)
-    parser.add_argument("--max-foot-clearance", type=float, default=0.055)
-    parser.add_argument("--max-support-foot-clearance", type=float, default=0.035)
-    parser.add_argument("--min-knee-height", type=float, default=0.07)
-    parser.add_argument("--max-knee-height", type=float, default=0.22)
-    parser.add_argument("--max-knee-to-foot", type=float, default=0.14)
-    parser.add_argument("--max-hand-distance-from-pelvis", type=float, default=0.36)
-    parser.add_argument("--max-feet-separation-xy", type=float, default=0.32)
+    parser.add_argument("--max-root-speed", type=float, default=None)
+    parser.add_argument("--min-pelvis-height", type=float, default=None)
+    parser.add_argument("--max-pelvis-height", type=float, default=None)
+    parser.add_argument("--max-torso-lean-deg", type=float, default=None)
+    parser.add_argument("--min-head-height", type=float, default=None)
+    parser.add_argument("--max-foot-clearance", type=float, default=None)
+    parser.add_argument("--max-support-foot-clearance", type=float, default=None)
+    parser.add_argument("--min-knee-height", type=float, default=None)
+    parser.add_argument("--max-knee-height", type=float, default=None)
+    parser.add_argument("--max-knee-to-foot", type=float, default=None)
+    parser.add_argument("--max-hand-distance-from-pelvis", type=float, default=None)
+    parser.add_argument("--max-feet-separation-xy", type=float, default=None)
     return parser.parse_args()
 
 
@@ -95,6 +98,7 @@ def resolve_effective_fps(data: np.lib.npyio.NpzFile, override: float | None) ->
 
 
 def build_config(args: argparse.Namespace, effective_fps: float) -> SparseFilterConfig:
+    profile = get_embodiment_profile(args.embodiment)
     clip_frames = max(int(round(args.clip_seconds * effective_fps)), args.min_frames)
     clip_stride_frames = max(int(round(args.filter_stride_seconds * effective_fps)), 1)
     return SparseFilterConfig(
@@ -102,18 +106,28 @@ def build_config(args: argparse.Namespace, effective_fps: float) -> SparseFilter
         clip_frames=clip_frames,
         clip_stride_frames=clip_stride_frames,
         min_frames=int(args.min_frames),
-        max_root_speed=float(args.max_root_speed),
-        min_pelvis_height=float(args.min_pelvis_height),
-        max_pelvis_height=float(args.max_pelvis_height),
-        max_torso_lean_deg=float(args.max_torso_lean_deg),
-        min_head_height=float(args.min_head_height),
-        max_foot_clearance=float(args.max_foot_clearance),
-        max_support_foot_clearance=float(args.max_support_foot_clearance),
-        min_knee_height=float(args.min_knee_height),
-        max_knee_height=float(args.max_knee_height),
-        max_knee_to_foot=float(args.max_knee_to_foot),
-        max_hand_distance_from_pelvis=float(args.max_hand_distance_from_pelvis),
-        max_feet_separation_xy=float(args.max_feet_separation_xy),
+        max_root_speed=float(profile.filter_max_root_speed if args.max_root_speed is None else args.max_root_speed),
+        min_pelvis_height=float(profile.min_pelvis_height if args.min_pelvis_height is None else args.min_pelvis_height),
+        max_pelvis_height=float(profile.max_pelvis_height if args.max_pelvis_height is None else args.max_pelvis_height),
+        max_torso_lean_deg=float(profile.max_torso_lean_deg if args.max_torso_lean_deg is None else args.max_torso_lean_deg),
+        min_head_height=float(profile.min_head_height if args.min_head_height is None else args.min_head_height),
+        max_foot_clearance=float(profile.max_foot_clearance if args.max_foot_clearance is None else args.max_foot_clearance),
+        max_support_foot_clearance=float(
+            profile.max_support_foot_clearance
+            if args.max_support_foot_clearance is None
+            else args.max_support_foot_clearance
+        ),
+        min_knee_height=float(profile.min_knee_height if args.min_knee_height is None else args.min_knee_height),
+        max_knee_height=float(profile.max_knee_height if args.max_knee_height is None else args.max_knee_height),
+        max_knee_to_foot=float(profile.max_knee_to_foot if args.max_knee_to_foot is None else args.max_knee_to_foot),
+        max_hand_distance_from_pelvis=float(
+            profile.max_hand_distance_from_pelvis
+            if args.max_hand_distance_from_pelvis is None
+            else args.max_hand_distance_from_pelvis
+        ),
+        max_feet_separation_xy=float(
+            profile.max_feet_separation_xy if args.max_feet_separation_xy is None else args.max_feet_separation_xy
+        ),
     )
 
 
@@ -318,8 +332,9 @@ def main() -> None:
         "segment_names": segment_names,
         "source": np.asarray(output_sources, dtype=str),
         "effective_fps": np.asarray(effective_fps, dtype=np.float32),
-        "op3_sparse_filter_config": np.asarray([json.dumps(asdict(cfg), sort_keys=True)], dtype=str),
-        "op3_sparse_filter_rejections": np.asarray(
+        "embodiment": np.asarray(args.embodiment, dtype=str),
+        "sparse_filter_config": np.asarray([json.dumps(asdict(cfg), sort_keys=True)], dtype=str),
+        "sparse_filter_rejections": np.asarray(
             [json.dumps(dict(rejection_reasons.most_common()), sort_keys=True)],
             dtype=str,
         ),
