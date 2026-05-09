@@ -56,7 +56,7 @@ def main() -> None:
     from op3_teleop_lab.tasks.task_registry import make_env_cfg_for_task
 
     if args.teleop_mode is None and args.teleop_dataset_path is None:
-        args.teleop_mode, args.teleop_dataset_path = default_dataset_path()
+        args.teleop_mode, args.teleop_dataset_path = default_dataset_path(args.task)
 
     cfg = make_env_cfg_for_task(args.task)
     cfg.scene.num_envs = args.num_envs

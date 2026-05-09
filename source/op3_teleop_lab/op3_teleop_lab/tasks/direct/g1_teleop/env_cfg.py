@@ -48,6 +48,7 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
     physics_engine = "physx"
     actor_history_steps = ACTOR_HISTORY_STEPS
     enable_add_diff = False
+    dataset_embodiment = "g1"
 
     action_clip = 1.0
     action_scale = 0.25

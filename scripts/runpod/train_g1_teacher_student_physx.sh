@@ -6,9 +6,7 @@ DATASET_PATH="${HUMANOID_TELEOP_DATASET_PATH:-${OP3_TELEOP_DATASET_PATH:-}}"
 if [[ -z "${DATASET_PATH}" ]]; then
   for candidate in \
     "${PROJECT_ROOT}/data/processed/g1/teleop_sparse_pose.npz" \
-    "${PROJECT_ROOT}/data/processed/open/teleop_sparse_pose.npz" \
-    "${PROJECT_ROOT}/data/processed/g1/aist_sparse_pose.npz" \
-    "${PROJECT_ROOT}/data/processed/open/aist_sparse_pose.npz"
+    "${PROJECT_ROOT}/data/processed/g1/aist_sparse_pose.npz"
   do
     if [[ -f "${candidate}" ]]; then
       DATASET_PATH="${candidate}"

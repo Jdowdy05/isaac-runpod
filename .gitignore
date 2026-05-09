@@ -64,6 +64,7 @@ id_ed25519.pub
 # Local agent/Codex workspace memory and generated skills
 docs/agent-context/
 docs/agent-skills/
+docs/obsidian-vault/
 tmp/
 
 # Local paper workspace and LaTeX build artifacts

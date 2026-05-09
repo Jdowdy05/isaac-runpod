@@ -15,14 +15,23 @@ _STATE_CONNECTIONS = (
 )
 
 
-def default_dataset_path() -> tuple[str | None, str | None]:
+def default_dataset_path(task_name: str | None = None) -> tuple[str | None, str | None]:
     root = Path(__file__).resolve().parents[2]
-    merged = root / "data/processed/open/teleop_sparse_pose.npz"
-    aist = root / "data/processed/open/aist_sparse_pose.npz"
-    if merged.exists():
-        return "dataset", str(merged)
-    if aist.exists():
-        return "dataset", str(aist)
+    is_g1 = task_name is not None and "G1" in task_name.upper()
+    candidates = (
+        (
+            root / "data/processed/g1/teleop_sparse_pose.npz",
+            root / "data/processed/g1/aist_sparse_pose.npz",
+        )
+        if is_g1
+        else (
+            root / "data/processed/open/teleop_sparse_pose.npz",
+            root / "data/processed/open/aist_sparse_pose.npz",
+        )
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return "dataset", str(candidate)
     return None, None
 
 

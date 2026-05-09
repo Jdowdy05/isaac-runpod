@@ -149,6 +149,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
             dt=self.cfg.sim.dt * self.cfg.decimation,
             mode=self.cfg.teleop_mode,
             dataset_path=self.cfg.teleop_dataset_path,
+            expected_embodiment=getattr(self.cfg, "dataset_embodiment", None),
         )
         self._add_diff_enabled = bool(getattr(self.cfg, "enable_add_diff", True))
         self.teleop_command = self.command_generator.step()
@@ -522,6 +523,8 @@ class HumanoidTeleopEnv(DirectRLEnv):
         return torch.cat((pos_diff.reshape(self.num_envs, -1), target_positions.reshape(self.num_envs, -1), pos_valid_flat), dim=-1)
 
     def _compute_target_segment_velocities(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.teleop_command.segment_velocities is not None and self.teleop_command.velocity_valid is not None:
+            return self.teleop_command.segment_velocities, self.teleop_command.velocity_valid.float()
         dt = float(self.cfg.sim.dt * self.cfg.decimation)
         if dt <= 0.0:
             raise ValueError("Control dt must be positive to compute target segment velocities.")
@@ -831,8 +834,18 @@ class HumanoidTeleopEnv(DirectRLEnv):
         self.fixed_position_targets[env_ids] = fixed_joint_pos
         self._actor_history[env_ids] = 0.0
         self.command_generator.reset(env_ids)
-        self._previous_command_positions[env_ids] = self.teleop_command.positions[env_ids]
-        self._previous_command_position_valid[env_ids] = self.teleop_command.position_valid[env_ids]
+        current_command = self.command_generator.current_batch()
+        self.teleop_command.positions[env_ids] = current_command.positions[env_ids]
+        self.teleop_command.orientations[env_ids] = current_command.orientations[env_ids]
+        self.teleop_command.position_valid[env_ids] = current_command.position_valid[env_ids]
+        self.teleop_command.rotation_valid[env_ids] = current_command.rotation_valid[env_ids]
+        self.teleop_command.phase[env_ids] = current_command.phase[env_ids]
+        if self.teleop_command.segment_velocities is not None and current_command.segment_velocities is not None:
+            self.teleop_command.segment_velocities[env_ids] = current_command.segment_velocities[env_ids]
+        if self.teleop_command.velocity_valid is not None and current_command.velocity_valid is not None:
+            self.teleop_command.velocity_valid[env_ids] = current_command.velocity_valid[env_ids]
+        self._previous_command_positions[env_ids] = current_command.positions[env_ids]
+        self._previous_command_position_valid[env_ids] = current_command.position_valid[env_ids]
         self._foot_air_time[env_ids] = 0.0
         self._previous_foot_contact[env_ids] = False
 
