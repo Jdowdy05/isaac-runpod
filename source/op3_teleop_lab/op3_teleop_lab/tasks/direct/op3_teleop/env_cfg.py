@@ -50,6 +50,8 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
     pose_rot_weight = 0.4
     add_diff_reward_weight = 1.0
     add_diff_reward_sigma = 4.0
+    root_velocity_weight = 0.8
+    root_velocity_sigma = 2.0
     upright_weight = 0.8
     root_height_weight = 0.4
     alive_reward = 0.2
@@ -94,8 +96,8 @@ class OP3TeleopEnvCfg(DirectRLEnvCfg):
         super_post_init = getattr(super(), "__post_init__", None)
         if callable(super_post_init):
             super_post_init()
-        self.teleop_mode = resolve_teleop_mode(self.teleop_mode)
-        self.teleop_dataset_path = resolve_teleop_dataset_path(self.teleop_dataset_path)
+        self.teleop_mode = resolve_teleop_mode(self.teleop_mode, self.dataset_embodiment)
+        self.teleop_dataset_path = resolve_teleop_dataset_path(self.teleop_dataset_path, self.dataset_embodiment)
         self.decimation = POLICY_DECIMATION
         self.sim = build_default_sim_cfg(self.physics_engine)
         self.contact_sensor = build_contact_sensor_cfg(self.profile)

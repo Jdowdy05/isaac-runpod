@@ -10,6 +10,7 @@ teacher_exploration_std: 0.05
 teacher_exploration_final_std: 0.01
 teacher_exploration_decay_iterations: 50000
 teacher_uses_critic_obs: true
+squash_actions: true
 student_rnn_hidden_dim: 256
 
 rollout_steps: 24

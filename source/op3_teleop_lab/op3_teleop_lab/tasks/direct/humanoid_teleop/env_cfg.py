@@ -42,6 +42,7 @@ def validate_reward_weight_signs(cfg) -> None:
         "pose_rot_weight",
         "add_diff_reward_weight",
         "body_velocity_weight",
+        "root_velocity_weight",
         "foot_air_time_reward_weight",
         "foot_orientation_weight",
         "upright_weight",
@@ -67,19 +68,38 @@ def validate_reward_weight_signs(cfg) -> None:
             raise ValueError(f"{name} must be non-negative because reward assembly subtracts this term.")
 
 
-def resolve_teleop_mode(default_mode: str) -> str:
-    return os.environ.get("HUMANOID_TELEOP_MODE", os.environ.get("OP3_TELEOP_MODE", default_mode))
+def _embodiment_env_name(embodiment: str | None, suffix: str) -> str | None:
+    if embodiment is None:
+        return None
+    key = embodiment.strip().upper()
+    if not key:
+        return None
+    return f"{key}_TELEOP_{suffix}"
 
 
-def resolve_teleop_dataset_path(default_path: str | None) -> str | None:
-    return os.environ.get("HUMANOID_TELEOP_DATASET_PATH", os.environ.get("OP3_TELEOP_DATASET_PATH", default_path))
+def resolve_teleop_mode(default_mode: str, embodiment: str | None = None) -> str:
+    specific_name = _embodiment_env_name(embodiment, "MODE")
+    if "HUMANOID_TELEOP_MODE" in os.environ:
+        return os.environ["HUMANOID_TELEOP_MODE"]
+    if specific_name is not None and specific_name in os.environ:
+        return os.environ[specific_name]
+    return default_mode
 
 
-def resolve_disable_env_add_diff_reward(default: bool = False) -> bool:
-    value = os.environ.get(
-        "HUMANOID_DISABLE_ADD_DIFF_REWARD",
-        os.environ.get("OP3_DISABLE_ADD_DIFF_REWARD"),
-    )
+def resolve_teleop_dataset_path(default_path: str | None, embodiment: str | None = None) -> str | None:
+    specific_name = _embodiment_env_name(embodiment, "DATASET_PATH")
+    if "HUMANOID_TELEOP_DATASET_PATH" in os.environ:
+        return os.environ["HUMANOID_TELEOP_DATASET_PATH"]
+    if specific_name is not None and specific_name in os.environ:
+        return os.environ[specific_name]
+    return default_path
+
+
+def resolve_disable_env_add_diff_reward(default: bool = False, embodiment: str | None = None) -> bool:
+    specific_name = _embodiment_env_name(embodiment, "DISABLE_ADD_DIFF_REWARD")
+    value = os.environ.get("HUMANOID_DISABLE_ADD_DIFF_REWARD")
+    if value is None and specific_name is not None:
+        value = os.environ.get(specific_name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}

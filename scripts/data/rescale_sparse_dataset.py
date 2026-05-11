@@ -26,6 +26,14 @@ def main() -> None:
     scale = float(target_profile.target_body_scale_m / source_profile.target_body_scale_m)
 
     with np.load(args.input, allow_pickle=False) as data:
+        if "embodiment" not in data:
+            raise KeyError(f"Input sparse dataset {args.input} does not declare an embodiment.")
+        input_embodiment = str(np.asarray(data["embodiment"]).item()).strip().lower()
+        if input_embodiment != source_profile.name:
+            raise ValueError(
+                f"Input sparse dataset embodiment mismatch: expected {source_profile.name!r}, "
+                f"found {input_embodiment!r}."
+            )
         payload: dict[str, np.ndarray] = {key: data[key] for key in data.files}
 
     payload["positions"] = payload["positions"].astype(np.float32) * np.float32(scale)

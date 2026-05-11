@@ -53,11 +53,13 @@ class DeterministicTeacherPolicy(nn.Module):
         activation: str,
         exploration_std: float,
         output_init_scale: float = 0.1,
+        squash_actions: bool = False,
     ) -> None:
         super().__init__()
         act = resolve_activation(activation)
         self.mean_net = build_mlp(obs_dim, hidden_dims, act_dim, act, output_scale=output_init_scale)
         self.register_buffer("exploration_std", torch.full((act_dim,), exploration_std))
+        self.squash_actions = bool(squash_actions)
 
     def set_exploration_std(self, std: float) -> None:
         self.exploration_std.fill_(float(std))
@@ -66,7 +68,8 @@ class DeterministicTeacherPolicy(nn.Module):
         return self.mean_net(obs)
 
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
-        return torch.tanh(self._mean_logits(obs))
+        mean = self._mean_logits(obs)
+        return torch.tanh(mean) if self.squash_actions else mean
 
     def distribution(self, obs: torch.Tensor) -> Normal:
         mean_logits = self._mean_logits(obs)
@@ -75,6 +78,9 @@ class DeterministicTeacherPolicy(nn.Module):
 
     def sample(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
+        if not self.squash_actions:
+            action = dist.rsample()
+            return action, dist.log_prob(action).sum(dim=-1)
         pre_tanh = dist.rsample()
         action = torch.tanh(pre_tanh)
         log_prob = dist.log_prob(pre_tanh).sum(dim=-1)
@@ -83,6 +89,8 @@ class DeterministicTeacherPolicy(nn.Module):
 
     def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         dist = self.distribution(obs)
+        if not self.squash_actions:
+            return dist.log_prob(actions).sum(dim=-1), dist.entropy().sum(dim=-1)
         clipped_actions = torch.clamp(actions, min=-1.0 + 1.0e-6, max=1.0 - 1.0e-6)
         pre_tanh = _atanh(clipped_actions)
         log_prob = dist.log_prob(pre_tanh).sum(dim=-1)
@@ -101,6 +109,7 @@ class TemporalStudentPolicy(nn.Module):
         hidden_dims: Sequence[int],
         activation: str,
         output_init_scale: float = 0.1,
+        squash_actions: bool = False,
     ) -> None:
         super().__init__()
         if obs_dim % history_steps != 0:
@@ -111,6 +120,7 @@ class TemporalStudentPolicy(nn.Module):
         act = resolve_activation(activation)
         self.history_steps = history_steps
         self.frame_dim = obs_dim // history_steps
+        self.squash_actions = bool(squash_actions)
         self.gru = nn.GRU(
             input_size=self.frame_dim,
             hidden_size=rnn_hidden_dim,
@@ -126,7 +136,8 @@ class TemporalStudentPolicy(nn.Module):
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         features = self._encode(obs)
-        return torch.tanh(self.head(features))
+        action = self.head(features)
+        return torch.tanh(action) if self.squash_actions else action
 
     def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
         return self.forward(obs)

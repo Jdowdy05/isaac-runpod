@@ -26,6 +26,7 @@ class TeacherStudentTrainingConfig:
     teacher_exploration_final_std: float = 0.01
     teacher_exploration_decay_iterations: int = 50000
     teacher_uses_critic_obs: bool = True
+    squash_actions: bool = True
     student_rnn_hidden_dim: int = 256
 
     rollout_steps: int = 24
@@ -77,6 +78,7 @@ class TeacherStudentTrainingConfig:
             "teacher_exploration_final_std",
             "teacher_exploration_decay_iterations",
             "teacher_uses_critic_obs",
+            "squash_actions",
             "student_rnn_hidden_dim",
             "rollout_steps",
             "teacher_max_iterations",

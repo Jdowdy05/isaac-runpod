@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
+
+from embodiment_profiles import get_embodiment_profile
 
 
 DEFAULT_SUBSETS = (
@@ -85,7 +87,6 @@ SEGMENTS = (
     "right_foot",
 )
 SEGMENT_INDEX = {name: idx for idx, name in enumerate(SEGMENTS)}
-OP3_TARGET_BODY_SCALE_M = 0.51
 OP3_HIP_TO_KNEE_M = 0.11
 OP3_KNEE_TO_ANKLE_M = 0.075
 OP3_ANKLE_TO_FOOT_M = 0.03
@@ -124,6 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smpl-model-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--target-fps", type=float, default=50.0)
+    parser.add_argument("--embodiment", type=str, default="op3")
     parser.add_argument("--min-frames", type=int, default=50)
     parser.add_argument("--subsets", nargs="*", default=list(DEFAULT_SUBSETS))
     parser.add_argument("--limit", type=int, default=None)
@@ -204,13 +206,13 @@ def estimate_body_scale(
     return max(scale, 1.0e-3)
 
 
-def compute_op3_scale_from_joints(joints: np.ndarray) -> np.float32:
+def compute_body_scale_factor_from_joints(joints: np.ndarray, target_body_scale_m: float) -> np.float32:
     pelvis = joints[:, SMPLH_BODY_JOINTS["pelvis"]]
     head = joints[:, SMPLH_BODY_JOINTS["head"]]
     left_ankle = joints[:, SMPLH_BODY_JOINTS["left_ankle"]]
     right_ankle = joints[:, SMPLH_BODY_JOINTS["right_ankle"]]
     body_scale = estimate_body_scale(pelvis, head, left_ankle, right_ankle)
-    return np.float32(OP3_TARGET_BODY_SCALE_M / body_scale)
+    return np.float32(target_body_scale_m / body_scale)
 
 
 def normalize_vectors(vectors: np.ndarray, eps: float = 1.0e-6) -> tuple[np.ndarray, np.ndarray]:
@@ -335,10 +337,10 @@ def contact_mask_from_foot(
 def filter_motion_clips(
     joints: np.ndarray,
     effective_fps: float,
-    op3_scale: np.float32,
+    body_scale_factor: np.float32,
     cfg: MotionFilterConfig,
 ) -> tuple[list[tuple[int, int]], Counter[str]]:
-    scaled_joints = joints.astype(np.float32) * float(op3_scale)
+    scaled_joints = joints.astype(np.float32) * float(body_scale_factor)
 
     pelvis = scaled_joints[:, SMPLH_BODY_JOINTS["pelvis"]]
     left_hip = scaled_joints[:, SMPLH_BODY_JOINTS["left_hip"]]
@@ -479,7 +481,9 @@ def filter_motion_clips(
 def build_sparse_sequence_from_joints(
     joints: np.ndarray,
     effective_fps: float,
-    op3_scale: np.float32 | None = None,
+    body_scale_factor: np.float32 | None = None,
+    target_body_scale_m: float = 0.51,
+    head_target: str = "head",
 ) -> tuple[np.ndarray, ...]:
     num_frames = joints.shape[0]
     positions = np.zeros((num_frames, len(SEGMENTS), 3), dtype=np.float32)
@@ -505,12 +509,13 @@ def build_sparse_sequence_from_joints(
     right_ankle = joints[:, SMPLH_BODY_JOINTS["right_ankle"]]
     left_foot = joints[:, SMPLH_BODY_JOINTS["left_foot"]]
     right_foot = joints[:, SMPLH_BODY_JOINTS["right_foot"]]
-    if op3_scale is None:
-        op3_scale = compute_op3_scale_from_joints(joints)
+    if body_scale_factor is None:
+        body_scale_factor = compute_body_scale_factor_from_joints(joints, target_body_scale_m)
 
+    sparse_head = 0.5 * (left_shoulder + right_shoulder) if head_target == "upper_torso" else head
     raw_targets = {
         "pelvis": pelvis,
-        "head": head,
+        "head": sparse_head,
         "left_hand": left_wrist,
         "right_hand": right_wrist,
         "left_knee": left_knee,
@@ -526,9 +531,9 @@ def build_sparse_sequence_from_joints(
         position_valid[:, seg_idx] = finite_mask(points)
 
     positions[:, SEGMENT_INDEX["pelvis"]] = 0.0
-    positions *= op3_scale
+    positions *= body_scale_factor
     target_lin_vel_xy = np.diff(pelvis_filled[:, :2], axis=0, prepend=pelvis_filled[:1, :2]) * effective_fps
-    target_lin_vel_xy = target_lin_vel_xy.astype(np.float32) * op3_scale
+    target_lin_vel_xy = target_lin_vel_xy.astype(np.float32) * body_scale_factor
 
     pelvis_lateral = (left_hip - right_hip) + (left_shoulder - right_shoulder)
     pelvis_up_hint = 0.5 * (left_shoulder + right_shoulder) - pelvis
@@ -547,10 +552,13 @@ def build_sparse_sequence_from_joints(
         orientations[:, seg_idx] = rotation_matrices_to_quats_xyzw(relative_mat)
         rotation_valid[:, seg_idx] = valid_mask & pelvis_rot_valid
 
-    head_world, head_rot_valid = make_frame_from_forward_up(
-        np.cross(left_shoulder - right_shoulder, head - neck),
-        head - neck,
-    )
+    if head_target == "upper_torso":
+        head_world, head_rot_valid = make_frame_from_forward_up(pelvis_forward, pelvis_up)
+    else:
+        head_world, head_rot_valid = make_frame_from_forward_up(
+            np.cross(left_shoulder - right_shoulder, head - neck),
+            head - neck,
+        )
     set_relative_orientation("head", head_world, head_rot_valid)
 
     left_hand_world, left_hand_rot_valid = make_frame_from_forward_up(left_wrist - left_elbow, pelvis_up)
@@ -704,6 +712,7 @@ def iter_motion_files(amass_root: Path, subsets: list[str]) -> list[Path]:
 
 def main() -> None:
     args = parse_args()
+    profile = get_embodiment_profile(args.embodiment)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_ext = resolve_model_ext(args.smpl_model_root)
     get_model = build_model_cache(args.smpl_model_root, model_ext, device)
@@ -715,12 +724,21 @@ def main() -> None:
     velocity_blocks: list[np.ndarray] = []
     sequence_starts: list[int] = []
     sequence_lengths: list[int] = []
+    sequence_fps: list[float] = []
     sources: list[str] = []
     total_frames = 0
     rejected_clips = 0
     kept_clips = 0
     rejection_reasons: Counter[str] = Counter()
-    filter_cfg_for_metadata = build_filter_config(args, args.target_fps) if not args.disable_feasibility_filter else None
+    filter_metadata = {}
+    if not args.disable_feasibility_filter:
+        filter_metadata = {
+            "filter_clip_seconds": float(args.filter_clip_seconds),
+            "filter_stride_seconds": float(args.filter_stride_seconds),
+            "min_frames": int(args.min_frames),
+            "target_fps": float(args.target_fps),
+            "per_motion_effective_fps": True,
+        }
 
     motion_paths = iter_motion_files(args.amass_root, args.subsets)
     if args.limit is not None:
@@ -766,14 +784,14 @@ def main() -> None:
                 joints_batches.append(joints.cpu().numpy().astype(np.float32))
 
         joints_np = np.concatenate(joints_batches, axis=0)
-        op3_scale = compute_op3_scale_from_joints(joints_np)
+        body_scale_factor = compute_body_scale_factor_from_joints(joints_np, profile.target_body_scale_m)
         valid_clip_ranges = [(0, len(joints_np))]
         if not args.disable_feasibility_filter:
             filter_cfg = build_filter_config(args, effective_fps)
             valid_clip_ranges, local_rejections = filter_motion_clips(
                 joints_np,
                 effective_fps=effective_fps,
-                op3_scale=op3_scale,
+                body_scale_factor=body_scale_factor,
                 cfg=filter_cfg,
             )
             rejection_reasons.update(local_rejections)
@@ -793,7 +811,9 @@ def main() -> None:
         positions, orientations, position_valid, rotation_valid, target_lin_vel_xy = build_sparse_sequence_from_joints(
             joints_np,
             effective_fps=effective_fps,
-            op3_scale=op3_scale,
+            body_scale_factor=body_scale_factor,
+            target_body_scale_m=profile.target_body_scale_m,
+            head_target=profile.head_target,
         )
 
         for clip_start, clip_end in valid_clip_ranges:
@@ -805,6 +825,7 @@ def main() -> None:
             velocity_blocks.append(target_lin_vel_xy[clip])
             sequence_starts.append(total_frames)
             sequence_lengths.append(clip_end - clip_start)
+            sequence_fps.append(float(effective_fps))
             sources.append(f"{motion_path}#{clip_start}:{clip_end}")
             total_frames += clip_end - clip_start
             kept_clips += 1
@@ -822,11 +843,14 @@ def main() -> None:
         target_lin_vel_xy=np.concatenate(velocity_blocks, axis=0),
         sequence_starts=np.asarray(sequence_starts, dtype=np.int64),
         sequence_lengths=np.asarray(sequence_lengths, dtype=np.int64),
+        sequence_fps=np.asarray(sequence_fps, dtype=np.float32),
         segment_names=np.asarray(SEGMENTS),
         source=np.asarray(sources, dtype=str),
-        effective_fps=float(args.target_fps),
-        op3_filter_config=np.asarray(
-            [json.dumps(asdict(filter_cfg_for_metadata), sort_keys=True)] if filter_cfg_for_metadata else [],
+        effective_fps=np.asarray(sequence_fps, dtype=np.float32),
+        embodiment=np.asarray(profile.name, dtype=str),
+        target_fps=np.asarray(args.target_fps, dtype=np.float32),
+        amass_filter_config=np.asarray(
+            [json.dumps(filter_metadata, sort_keys=True)] if filter_metadata else [],
             dtype=str,
         ),
     )

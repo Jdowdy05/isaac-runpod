@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class SparseEmbodimentProfile:
     name: str
     target_body_scale_m: float
+    head_target: str
     aist_max_root_speed: float
     filter_max_root_speed: float
     min_pelvis_height: float
@@ -25,6 +26,7 @@ class SparseEmbodimentProfile:
 OP3_PROFILE = SparseEmbodimentProfile(
     name="op3",
     target_body_scale_m=0.51,
+    head_target="head",
     aist_max_root_speed=0.45,
     filter_max_root_speed=0.45,
     min_pelvis_height=0.22,
@@ -47,6 +49,7 @@ OP3_PROFILE = SparseEmbodimentProfile(
 G1_PROFILE = SparseEmbodimentProfile(
     name="g1",
     target_body_scale_m=1.02,
+    head_target="upper_torso",
     aist_max_root_speed=0.90,
     filter_max_root_speed=0.90,
     min_pelvis_height=0.48,

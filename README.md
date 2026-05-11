@@ -17,8 +17,10 @@ The current repository is a scaffold, not a finished training system. It gives y
 - RunPod bootstrap scripts.
 - Open-dataset download and preprocessing scripts.
 - Notes on the later addition of licensed motion sources such as AMASS.
-- A standalone ADD trainer path based on the MimicKit paper and codebase.
-- An RSL-RL PPO entry point for the same task, using unsquashed Gaussian actions and learned action noise.
+- A standalone ADD trainer path based on Adversarial Differential Discriminators.
+- RSL-RL PPO entry points using unsquashed Gaussian actions and learned action noise.
+- A Unitree G1 comparison path with dedicated G1 sparse data and a teacher-student training entry point.
+- Local project-memory folders under `docs/agent-context/`, `docs/agent-skills/`, and `docs/obsidian-vault/`; these are intentionally gitignored.
 
 ## Project Layout
 
@@ -90,6 +92,8 @@ The current repository is a scaffold, not a finished training system. It gives y
    python scripts/rsl_rl/train_add.py --task Isaac-OP3-Teleop-Direct-v0 --headless
    ```
 
+   ADD is currently an OP3 path. G1 ADD training is disabled; use the stock G1 PPO or G1 teacher-student paths after confirming the dataset is under `data/processed/g1/`.
+
 To train with ADD instead of the RL Games baseline:
 
 ```bash
@@ -107,3 +111,9 @@ The longer-term plan is:
 - Start with open, unattended datasets for pipeline bring-up.
 - Add stronger licensed motion data later, especially AMASS.
 - Optionally add EgoBody or similar XR-centric data later if you want tighter alignment with headset-and-controller teleoperation.
+
+OP3 and G1 processed sparse datasets are not interchangeable. OP3 uses `data/processed/open/...`; G1 uses `data/processed/g1/...`.
+
+Sparse dataset NPZs now carry hard metadata contracts: `embodiment`, `sequence_fps`, and root trajectory commands via `target_lin_vel_xy`. The command generator plays each sequence by elapsed time and its own FPS while the policy still controls at 50 Hz. Regenerate older datasets that lack this metadata before training.
+
+Actor observations include pelvis-frame sparse position targets, pelvis-frame orientation target/error features, and commanded root linear velocity in the pelvis/root frame. These are included because the reward tracks position, orientation, body velocity, and root velocity.

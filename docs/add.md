@@ -14,6 +14,8 @@ This repository includes a standalone implementation of the paper:
 - differential normalizer based on mean absolute value
 - an RSL-RL PPO path that keeps RSL-RL's actor-critic, learned Gaussian action noise, rollout storage, clipped PPO objective, observation normalization, and adaptive KL schedule while adding online ADD discriminator rewards and discriminator updates
 
+ADD is currently an OP3 workflow in this repository. G1 uses stock RSL-RL PPO and a separate teacher-student path; `scripts/runpod/train_rsl_add_g1_physx.sh` intentionally exits instead of launching G1 ADD training.
+
 ## Action Contract
 
 - Teacher and student policy heads are unsquashed linear outputs, matching RSL-RL/H2O-style Gaussian actors rather than a final `tanh`.
@@ -23,9 +25,9 @@ This repository includes a standalone implementation of the paper:
 
 ## Observation Frame
 
-- Deployable actor observations exclude commanded velocity and global/root-world orientation.
+- Deployable actor observations exclude global/root-world orientation, but include the commanded root linear velocity expressed in the pelvis/root frame.
 - Sparse pose positions are pelvis-frame coordinates. Dataset pelvis-origin world-axis deltas are rotated into the pelvis frame at load time.
-- Non-pelvis sparse orientations are pelvis-relative 6D pose targets; pelvis orientation is not tracked as a global yaw command.
+- Non-pelvis sparse orientations are pelvis-relative 6D pose targets, and the actor observation includes both orientation error and target-orientation features. Pelvis orientation is not tracked as a global yaw command.
 - Privileged critic-only features may still include simulation values such as root height and contact features.
 
 The current OP3 integration uses the sparse teleoperation target as the reference and builds the differential vector from:
@@ -35,7 +37,7 @@ The current OP3 integration uses the sparse teleoperation target as the referenc
 
 ## RSL-RL + ADD
 
-Use `scripts/rsl_rl/train_add.py` or `scripts/runpod/train_rsl_add_physx.sh` for the combined path. It disables the dense environment ADD reward by default and instead computes the policy reward from:
+Use `scripts/rsl_rl/train_add.py` or `scripts/runpod/train_rsl_add_physx.sh` for the OP3 combined path. It disables the dense environment ADD reward by default and instead computes the policy reward from:
 
 - task reward from the environment
 - adversarial ADD reward `-log(1 - D(diff))`

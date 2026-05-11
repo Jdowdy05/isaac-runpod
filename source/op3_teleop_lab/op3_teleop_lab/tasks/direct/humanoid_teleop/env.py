@@ -506,21 +506,48 @@ class HumanoidTeleopEnv(DirectRLEnv):
         root_quat = quat_normalize(self._as_torch(self.robot.data.root_quat_w))
         root_quat_inv = quat_conjugate(root_quat)
         body_pos_w = self._as_torch(self.robot.data.body_pos_w)
+        body_quat_w = quat_normalize(self._as_torch(self.robot.data.body_quat_w))
+        identity_quat = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        identity_quat[:, 3] = 1.0
 
         current_pos_rel = []
+        current_quat_rel = []
         for segment_name in TRACKED_SEGMENTS:
             if segment_name == "pelvis":
                 current_pos_rel.append(torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device))
+                current_quat_rel.append(identity_quat)
                 continue
             body_id = self._body_ids[segment_name]
             current_pos_rel.append(quat_apply(root_quat_inv, body_pos_w[:, body_id] - root_pos))
+            current_quat_rel.append(quat_normalize(quat_mul(root_quat_inv, body_quat_w[:, body_id])))
 
         current_pos_rel = torch.stack(current_pos_rel, dim=1)
+        current_quat_rel = torch.stack(current_quat_rel, dim=1)
         pos_valid = self.teleop_command.position_valid.unsqueeze(-1).float()
         target_positions = self.teleop_command.positions * pos_valid
         pos_diff = (self.teleop_command.positions - current_pos_rel) * pos_valid
         pos_valid_flat = self.teleop_command.position_valid.float().reshape(self.num_envs, -1)
-        return torch.cat((pos_diff.reshape(self.num_envs, -1), target_positions.reshape(self.num_envs, -1), pos_valid_flat), dim=-1)
+        rot_valid = self.teleop_command.rotation_valid.unsqueeze(-1).float()
+        target_rot = quaternion_to_tangent_and_normal(quat_normalize(self.teleop_command.orientations)) * rot_valid
+        current_rot = quaternion_to_tangent_and_normal(current_quat_rel)
+        rot_diff = (target_rot - current_rot) * rot_valid
+        rot_valid_flat = self.teleop_command.rotation_valid.float().reshape(self.num_envs, -1)
+        if self.teleop_command.root_lin_vel_xy is None:
+            root_lin_vel_xy = torch.zeros((self.num_envs, 2), dtype=torch.float32, device=self.device)
+        else:
+            root_lin_vel_xy = self.teleop_command.root_lin_vel_xy
+        return torch.cat(
+            (
+                pos_diff.reshape(self.num_envs, -1),
+                target_positions.reshape(self.num_envs, -1),
+                pos_valid_flat,
+                rot_diff.reshape(self.num_envs, -1),
+                target_rot.reshape(self.num_envs, -1),
+                rot_valid_flat,
+                root_lin_vel_xy,
+            ),
+            dim=-1,
+        )
 
     def _compute_target_segment_velocities(self) -> tuple[torch.Tensor, torch.Tensor]:
         if self.teleop_command.segment_velocities is not None and self.teleop_command.velocity_valid is not None:
@@ -558,7 +585,6 @@ class HumanoidTeleopEnv(DirectRLEnv):
         if self._torque_curriculum_enabled:
             self._torque_curriculum_step += 1
             self._apply_torque_limit_curriculum()
-        self.prev_actions.copy_(self.actions)
         action_clip = float(getattr(self.cfg, "action_clip", 100.0))
         self.unclipped_actions.copy_(actions)
         self.raw_actions = torch.clamp(actions, -action_clip, action_clip)
@@ -577,6 +603,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
         self._previous_command_positions.copy_(self.teleop_command.positions)
         self._previous_command_position_valid.copy_(self.teleop_command.position_valid)
         self.teleop_command = self.command_generator.step()
+        self.prev_actions.copy_(self.actions)
         actor_frame = self._build_actor_frame()
         actor_obs = self._update_actor_history(actor_frame)
         critic_obs = self._build_critic_obs(actor_obs)
@@ -664,6 +691,15 @@ class HumanoidTeleopEnv(DirectRLEnv):
             torch.sum(target_segment_vel_valid * body_vel_reward_per_segment, dim=-1)
             / torch.clamp(torch.sum(target_segment_vel_valid, dim=-1), min=1.0)
         )
+        if self.teleop_command.root_lin_vel_xy is None:
+            target_root_vel_xy = torch.zeros((self.num_envs, 2), dtype=torch.float32, device=self.device)
+        else:
+            target_root_vel_xy = self.teleop_command.root_lin_vel_xy
+        current_root_vel_xy = self._get_root_linear_velocity_b()[:, :2]
+        root_vel_error = torch.linalg.norm(current_root_vel_xy - target_root_vel_xy, dim=-1)
+        root_velocity_reward = torch.exp(
+            -float(getattr(self.cfg, "root_velocity_sigma", self.cfg.pose_tracking_sigma)) * root_vel_error.square()
+        )
 
         projected_gravity = self._as_torch(self.robot.data.projected_gravity_b)
         upright_reward = torch.clamp((-projected_gravity[:, 2]), min=0.0, max=1.0)
@@ -733,6 +769,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
             + self.cfg.pose_rot_weight * pose_rot_reward
             + self.cfg.add_diff_reward_weight * add_diff_reward
             + float(getattr(self.cfg, "body_velocity_weight", 0.0)) * body_vel_reward
+            + float(getattr(self.cfg, "root_velocity_weight", 0.0)) * root_velocity_reward
             + float(getattr(self.cfg, "foot_air_time_reward_weight", 0.0)) * foot_air_time_reward
             + float(getattr(self.cfg, "foot_orientation_weight", 0.0)) * foot_orientation_reward
             + self.cfg.upright_weight * upright_reward
@@ -751,6 +788,7 @@ class HumanoidTeleopEnv(DirectRLEnv):
             "reward/pose_pos": pose_pos_reward.detach().mean(),
             "reward/pose_rot": pose_rot_reward.detach().mean(),
             "reward/body_vel": body_vel_reward.detach().mean(),
+            "reward/root_vel": root_velocity_reward.detach().mean(),
             "reward/foot_air_time": foot_air_time_reward.detach().mean(),
             "reward/foot_orientation": foot_orientation_reward.detach().mean(),
             "penalty/termination": (self.cfg.termination_penalty * termination_penalty_mask).detach().mean(),
@@ -844,6 +882,8 @@ class HumanoidTeleopEnv(DirectRLEnv):
             self.teleop_command.segment_velocities[env_ids] = current_command.segment_velocities[env_ids]
         if self.teleop_command.velocity_valid is not None and current_command.velocity_valid is not None:
             self.teleop_command.velocity_valid[env_ids] = current_command.velocity_valid[env_ids]
+        if self.teleop_command.root_lin_vel_xy is not None and current_command.root_lin_vel_xy is not None:
+            self.teleop_command.root_lin_vel_xy[env_ids] = current_command.root_lin_vel_xy[env_ids]
         self._previous_command_positions[env_ids] = current_command.positions[env_ids]
         self._previous_command_position_valid[env_ids] = current_command.position_valid[env_ids]
         self._foot_air_time[env_ids] = 0.0

@@ -58,13 +58,22 @@ def main() -> None:
     )
     if args.teleop_mode:
         env["HUMANOID_TELEOP_MODE"] = args.teleop_mode
-        env["OP3_TELEOP_MODE"] = args.teleop_mode
+        if "G1" in args.task.upper():
+            env["G1_TELEOP_MODE"] = args.teleop_mode
+        else:
+            env["OP3_TELEOP_MODE"] = args.teleop_mode
     if args.teleop_dataset_path:
         env["HUMANOID_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
-        env["OP3_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
+        if "G1" in args.task.upper():
+            env["G1_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
+        else:
+            env["OP3_TELEOP_DATASET_PATH"] = args.teleop_dataset_path
     if args.disable_env_add_diff_reward:
         env["HUMANOID_DISABLE_ADD_DIFF_REWARD"] = "1"
-        env["OP3_DISABLE_ADD_DIFF_REWARD"] = "1"
+        if "G1" in args.task.upper():
+            env["G1_DISABLE_ADD_DIFF_REWARD"] = "1"
+        else:
+            env["OP3_DISABLE_ADD_DIFF_REWARD"] = "1"
 
     bootstrap = (
         "import runpy, sys; "

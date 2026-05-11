@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DATASET_PATH="${HUMANOID_TELEOP_DATASET_PATH:-${OP3_TELEOP_DATASET_PATH:-}}"
+DATASET_PATH="${HUMANOID_TELEOP_DATASET_PATH:-${G1_TELEOP_DATASET_PATH:-}}"
 if [[ -z "${DATASET_PATH}" ]]; then
   for candidate in \
     "${PROJECT_ROOT}/data/processed/g1/teleop_sparse_pose.npz" \
@@ -22,8 +22,8 @@ export ISAACLAB_ROOT
 
 if [[ -n "${HUMANOID_TELEOP_MODE:-}" ]]; then
   TELEOP_MODE="${HUMANOID_TELEOP_MODE}"
-elif [[ -n "${OP3_TELEOP_MODE:-}" ]]; then
-  TELEOP_MODE="${OP3_TELEOP_MODE}"
+elif [[ -n "${G1_TELEOP_MODE:-}" ]]; then
+  TELEOP_MODE="${G1_TELEOP_MODE}"
 elif [[ -n "${DATASET_PATH}" && -f "${DATASET_PATH}" ]]; then
   TELEOP_MODE="dataset"
 else

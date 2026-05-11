@@ -27,7 +27,8 @@ class ADDTrainingConfig:
     teacher_exploration_std: float = 0.3
     teacher_exploration_final_std: float = 0.08
     teacher_exploration_decay_iterations: int = 30000
-    teacher_uses_critic_obs: bool = True
+    teacher_uses_critic_obs: bool = False
+    squash_actions: bool = False
     student_rnn_hidden_dim: int = 256
 
     rollout_steps: int = 32
@@ -106,6 +107,7 @@ class ADDTrainingConfig:
             "teacher_exploration_final_std",
             "teacher_exploration_decay_iterations",
             "teacher_uses_critic_obs",
+            "squash_actions",
             "student_rnn_hidden_dim",
             "rollout_steps",
             "max_iterations",

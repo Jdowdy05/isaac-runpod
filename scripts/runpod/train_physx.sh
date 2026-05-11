@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DATASET_PATH="${OP3_TELEOP_DATASET_PATH:-${PROJECT_ROOT}/data/processed/open/teleop_sparse_pose.npz}"
+DATASET_PATH="${HUMANOID_TELEOP_DATASET_PATH:-${OP3_TELEOP_DATASET_PATH:-${PROJECT_ROOT}/data/processed/open/teleop_sparse_pose.npz}}"
 if [[ ! -f "${DATASET_PATH}" ]]; then
   DATASET_PATH="${PROJECT_ROOT}/data/processed/open/aist_sparse_pose.npz"
 fi
@@ -10,7 +10,9 @@ NUM_ENVS="${NUM_ENVS:-2048}"
 source "${PROJECT_ROOT}/scripts/runpod/common.sh"
 ISAACLAB_ROOT="$(resolve_isaaclab_root)"
 
-if [[ -n "${OP3_TELEOP_MODE:-}" ]]; then
+if [[ -n "${HUMANOID_TELEOP_MODE:-}" ]]; then
+  TELEOP_MODE="${HUMANOID_TELEOP_MODE}"
+elif [[ -n "${OP3_TELEOP_MODE:-}" ]]; then
   TELEOP_MODE="${OP3_TELEOP_MODE}"
 elif [[ -f "${DATASET_PATH}" ]]; then
   TELEOP_MODE="dataset"
@@ -20,6 +22,7 @@ fi
 
 export OP3_TELEOP_MODE="${TELEOP_MODE}"
 if [[ -f "${DATASET_PATH}" ]]; then
+  export HUMANOID_TELEOP_DATASET_PATH="${DATASET_PATH}"
   export OP3_TELEOP_DATASET_PATH="${DATASET_PATH}"
 fi
 

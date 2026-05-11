@@ -63,6 +63,8 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
     pose_pos_weight = 1.75
     pose_rot_weight = 0.4
     body_velocity_weight = 2.0
+    root_velocity_weight = 1.0
+    root_velocity_sigma = 2.0
     add_diff_reward_weight = 0.0
     add_diff_reward_sigma = 4.0
     foot_air_time_reward_weight = 2.5
@@ -116,9 +118,9 @@ class G1TeleopEnvCfg(DirectRLEnvCfg):
         super_post_init = getattr(super(), "__post_init__", None)
         if callable(super_post_init):
             super_post_init()
-        self.teleop_mode = resolve_teleop_mode(self.teleop_mode)
-        self.teleop_dataset_path = resolve_teleop_dataset_path(self.teleop_dataset_path)
-        if self.enable_add_diff and resolve_disable_env_add_diff_reward():
+        self.teleop_mode = resolve_teleop_mode(self.teleop_mode, self.dataset_embodiment)
+        self.teleop_dataset_path = resolve_teleop_dataset_path(self.teleop_dataset_path, self.dataset_embodiment)
+        if self.enable_add_diff and resolve_disable_env_add_diff_reward(embodiment=self.dataset_embodiment):
             self.add_diff_reward_weight = 0.0
         self.decimation = POLICY_DECIMATION
         self.sim = build_default_sim_cfg(self.physics_engine)

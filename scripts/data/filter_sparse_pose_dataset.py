@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -87,14 +87,39 @@ def finite_rows(values: np.ndarray) -> np.ndarray:
     return np.isfinite(values).all(axis=-1)
 
 
-def resolve_effective_fps(data: np.lib.npyio.NpzFile, override: float | None) -> float:
+def resolve_sequence_fps(data: np.lib.npyio.NpzFile, override: float | None, sequence_count: int) -> np.ndarray:
     if override is not None:
-        return float(override)
-    if "effective_fps" in data:
-        value = np.asarray(data["effective_fps"])
+        fps = np.full(sequence_count, float(override), dtype=np.float32)
+    elif "sequence_fps" in data:
+        value = np.asarray(data["sequence_fps"], dtype=np.float32)
         if value.shape == ():
-            return float(value)
-    return 50.0
+            fps = np.full(sequence_count, float(value), dtype=np.float32)
+        elif value.ndim == 1 and len(value) == sequence_count:
+            fps = value.astype(np.float32)
+        else:
+            raise ValueError(f"sequence_fps must be scalar or length {sequence_count}, got shape {value.shape}.")
+    elif "effective_fps" in data:
+        value = np.asarray(data["effective_fps"], dtype=np.float32)
+        if value.shape == ():
+            fps = np.full(sequence_count, float(value), dtype=np.float32)
+        elif value.ndim == 1 and len(value) == sequence_count:
+            fps = value.astype(np.float32)
+        else:
+            raise ValueError(f"effective_fps must be scalar or length {sequence_count}, got shape {value.shape}.")
+    else:
+        raise KeyError("Sparse dataset is missing required FPS metadata: sequence_fps or effective_fps.")
+
+    if not np.isfinite(fps).all() or np.any(fps <= 0.0):
+        raise ValueError("Sparse dataset contains invalid FPS values.")
+    return fps
+
+
+def effective_fps_metadata(sequence_fps: np.ndarray) -> np.ndarray:
+    if len(sequence_fps) == 0:
+        return np.asarray(0.0, dtype=np.float32)
+    if np.allclose(sequence_fps, sequence_fps[0]):
+        return np.asarray(float(sequence_fps[0]), dtype=np.float32)
+    return sequence_fps.astype(np.float32)
 
 
 def build_config(args: argparse.Namespace, effective_fps: float) -> SparseFilterConfig:
@@ -148,6 +173,41 @@ def source_for_sequence(data: np.lib.npyio.NpzFile, seq_index: int, input_path: 
     if len(source) > seq_index:
         return str(source[seq_index])
     return f"{input_path}#{seq_index}"
+
+
+def validate_sequence_metadata(
+    starts: np.ndarray,
+    lengths: np.ndarray,
+    fps: np.ndarray,
+    total_frames: int,
+) -> None:
+    if starts.ndim != 1 or lengths.ndim != 1 or starts.shape != lengths.shape:
+        raise ValueError(
+            "sequence_starts and sequence_lengths must be matching 1-D arrays; "
+            f"got {starts.shape} and {lengths.shape}."
+        )
+    if fps.ndim != 1 or fps.shape != lengths.shape:
+        raise ValueError(f"sequence_fps must be length {len(lengths)}, got shape {fps.shape}.")
+    if np.any(lengths <= 0):
+        raise ValueError("sequence_lengths must be strictly positive.")
+    if np.any(starts < 0) or np.any(starts + lengths > total_frames):
+        raise ValueError("sequence_starts/sequence_lengths contain ranges outside the sparse dataset.")
+
+
+def sequence_source_for_sequence(
+    data: np.lib.npyio.NpzFile,
+    seq_index: int,
+    sequence_count: int,
+    input_path: Path,
+) -> str:
+    if "sequence_source_dataset" not in data:
+        return str(input_path)
+    sequence_sources = np.asarray(data["sequence_source_dataset"], dtype=str)
+    if sequence_sources.ndim != 1 or len(sequence_sources) != sequence_count:
+        raise ValueError(
+            f"sequence_source_dataset must be length {sequence_count}, got shape {sequence_sources.shape}."
+        )
+    return str(sequence_sources[seq_index])
 
 
 def filter_sequence(
@@ -250,6 +310,15 @@ def filter_sequence(
 def main() -> None:
     args = parse_args()
     data = np.load(args.input, allow_pickle=False)
+    expected_embodiment = args.embodiment.strip().lower()
+    if "embodiment" not in data:
+        raise KeyError("Sparse filter requires input datasets to declare an embodiment.")
+    input_embodiment = str(np.asarray(data["embodiment"]).item()).strip().lower()
+    if input_embodiment != expected_embodiment:
+        raise ValueError(
+            f"Sparse filter embodiment mismatch: input declares {input_embodiment!r}, "
+            f"but --embodiment is {expected_embodiment!r}."
+        )
 
     positions = np.asarray(data["positions"], dtype=np.float32)
     orientations = np.asarray(data["orientations"], dtype=np.float32)
@@ -269,8 +338,8 @@ def main() -> None:
         if "sequence_lengths" in data
         else np.asarray([len(positions)], dtype=np.int64)
     )
-    effective_fps = resolve_effective_fps(data, args.effective_fps)
-    cfg = build_config(args, effective_fps)
+    sequence_fps = resolve_sequence_fps(data, args.effective_fps, len(sequence_lengths))
+    validate_sequence_metadata(sequence_starts, sequence_lengths, sequence_fps, len(positions))
 
     position_blocks: list[np.ndarray] = []
     orientation_blocks: list[np.ndarray] = []
@@ -279,15 +348,20 @@ def main() -> None:
     velocity_blocks: list[np.ndarray] = []
     output_sequence_starts: list[int] = []
     output_sequence_lengths: list[int] = []
+    output_sequence_fps: list[float] = []
+    output_sequence_source_datasets: list[str] = []
     output_sources: list[str] = []
     rejection_reasons: Counter[str] = Counter()
     candidate_clips = 0
     kept_clips = 0
     total_frames = 0
 
-    for seq_idx, (seq_start, seq_len) in enumerate(zip(sequence_starts, sequence_lengths, strict=False)):
+    for seq_idx, (seq_start, seq_len, seq_fps) in enumerate(
+        zip(sequence_starts, sequence_lengths, sequence_fps, strict=False)
+    ):
         seq_start = int(seq_start)
         seq_end = seq_start + int(seq_len)
+        cfg = build_config(args, float(seq_fps))
         seq_positions = positions[seq_start:seq_end]
         seq_position_valid = position_valid[seq_start:seq_end]
         seq_vel = target_lin_vel_xy[seq_start:seq_end]
@@ -302,6 +376,7 @@ def main() -> None:
         )
         rejection_reasons.update(local_rejections)
         source = source_for_sequence(data, seq_idx, args.input)
+        sequence_source_dataset = sequence_source_for_sequence(data, seq_idx, len(sequence_lengths), args.input)
 
         for local_start, local_end in local_ranges:
             clip_start = seq_start + local_start
@@ -314,6 +389,8 @@ def main() -> None:
             velocity_blocks.append(target_lin_vel_xy[clip])
             output_sequence_starts.append(total_frames)
             output_sequence_lengths.append(clip_end - clip_start)
+            output_sequence_fps.append(float(seq_fps))
+            output_sequence_source_datasets.append(sequence_source_dataset)
             output_sources.append(f"{source}#{local_start}:{local_end}")
             total_frames += clip_end - clip_start
             kept_clips += 1
@@ -321,6 +398,15 @@ def main() -> None:
     if not position_blocks:
         raise RuntimeError("Sparse filter rejected every candidate clip.")
 
+    output_sequence_fps_array = np.asarray(output_sequence_fps, dtype=np.float32)
+    filter_config_metadata = {
+        "clip_seconds": float(args.clip_seconds),
+        "filter_stride_seconds": float(args.filter_stride_seconds),
+        "min_frames": int(args.min_frames),
+        "sequence_fps_count": int(len(output_sequence_fps_array)),
+        "sequence_fps_min": float(np.min(output_sequence_fps_array)),
+        "sequence_fps_max": float(np.max(output_sequence_fps_array)),
+    }
     output_data = {
         "positions": np.concatenate(position_blocks, axis=0),
         "orientations": np.concatenate(orientation_blocks, axis=0),
@@ -329,17 +415,24 @@ def main() -> None:
         "target_lin_vel_xy": np.concatenate(velocity_blocks, axis=0),
         "sequence_starts": np.asarray(output_sequence_starts, dtype=np.int64),
         "sequence_lengths": np.asarray(output_sequence_lengths, dtype=np.int64),
+        "sequence_fps": output_sequence_fps_array,
+        "sequence_source_dataset": np.asarray(output_sequence_source_datasets, dtype=str),
         "segment_names": segment_names,
         "source": np.asarray(output_sources, dtype=str),
-        "effective_fps": np.asarray(effective_fps, dtype=np.float32),
-        "embodiment": np.asarray(args.embodiment, dtype=str),
-        "sparse_filter_config": np.asarray([json.dumps(asdict(cfg), sort_keys=True)], dtype=str),
+        "effective_fps": effective_fps_metadata(output_sequence_fps_array),
+        "embodiment": np.asarray(expected_embodiment, dtype=str),
+        "sparse_filter_config": np.asarray([json.dumps(filter_config_metadata, sort_keys=True)], dtype=str),
         "sparse_filter_rejections": np.asarray(
             [json.dumps(dict(rejection_reasons.most_common()), sort_keys=True)],
             dtype=str,
         ),
     }
-    if "source_datasets" in data:
+    if output_sequence_source_datasets:
+        output_data["source_datasets"] = np.asarray(
+            list(dict.fromkeys(output_sequence_source_datasets)),
+            dtype=str,
+        )
+    elif "source_datasets" in data:
         output_data["source_datasets"] = np.asarray(data["source_datasets"], dtype=str)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

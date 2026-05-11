@@ -168,6 +168,7 @@ def build_sparse_sequence(
     keypoints3d: np.ndarray,
     effective_fps: float,
     target_body_scale_m: float,
+    head_target: str = "head",
 ) -> tuple[np.ndarray, ...]:
     num_frames = keypoints3d.shape[0]
     positions = np.zeros((num_frames, len(SEGMENTS), 3), dtype=np.float32)
@@ -193,9 +194,10 @@ def build_sparse_sequence(
     body_scale = estimate_body_scale(pelvis, nose, left_ankle, right_ankle)
     body_scale_factor = np.float32(target_body_scale_m / body_scale)
 
+    sparse_head = shoulder_center if head_target == "upper_torso" else nose
     raw_targets = {
         "pelvis": pelvis,
-        "head": nose,
+        "head": sparse_head,
         "left_hand": keypoints3d[:, AIST_KEYPOINTS["left_wrist"]],
         "right_hand": keypoints3d[:, AIST_KEYPOINTS["right_wrist"]],
         "left_knee": left_knee,
@@ -242,8 +244,11 @@ def build_sparse_sequence(
         orientations[:, seg_idx] = rotation_matrices_to_quats_xyzw(relative_mat)
         rotation_valid[:, seg_idx] = valid_mask & pelvis_rot_valid
 
-    head_forward_hint = np.cross(left_shoulder - right_shoulder, nose - shoulder_center)
-    head_world, head_rot_valid = make_frame_from_forward_up(head_forward_hint, nose - shoulder_center)
+    if head_target == "upper_torso":
+        head_world, head_rot_valid = make_frame_from_forward_up(pelvis_forward, pelvis_up)
+    else:
+        head_forward_hint = np.cross(left_shoulder - right_shoulder, nose - shoulder_center)
+        head_world, head_rot_valid = make_frame_from_forward_up(head_forward_hint, nose - shoulder_center)
     set_relative_orientation("head", head_world, head_rot_valid)
 
     left_hand_world, left_hand_rot_valid = make_frame_from_forward_up(
@@ -311,6 +316,7 @@ def main() -> None:
             keypoints3d,
             effective_fps=effective_fps,
             target_body_scale_m=profile.target_body_scale_m,
+            head_target=profile.head_target,
         )
         sequence_max_root_speed = float(np.linalg.norm(target_lin_vel_xy, axis=-1).max())
         if sequence_max_root_speed > max_root_speed:
@@ -339,6 +345,7 @@ def main() -> None:
         target_lin_vel_xy=np.concatenate(velocity_blocks, axis=0),
         sequence_starts=np.asarray(sequence_starts, dtype=np.int64),
         sequence_lengths=np.asarray(sequence_lengths, dtype=np.int64),
+        sequence_fps=np.full(len(sequence_starts), effective_fps, dtype=np.float32),
         segment_names=np.asarray(SEGMENTS),
         source="AIST++ keypoints3d",
         effective_fps=effective_fps,

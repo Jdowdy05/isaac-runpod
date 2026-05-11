@@ -46,6 +46,15 @@ def quat_from_euler_xyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tens
     return _normalize_quat(quat)
 
 
+def _read_npz_scalar_string(data: np.lib.npyio.NpzFile, key: str) -> str | None:
+    if key not in data:
+        return None
+    value = np.asarray(data[key])
+    if value.shape != ():
+        raise ValueError(f"Sparse dataset metadata {key!r} must be a scalar string, got shape {value.shape}.")
+    return str(value.item()).strip().lower()
+
+
 @dataclass
 class SparsePoseBatch:
     positions: torch.Tensor
@@ -55,6 +64,7 @@ class SparsePoseBatch:
     phase: torch.Tensor
     segment_velocities: torch.Tensor | None = None
     velocity_valid: torch.Tensor | None = None
+    root_lin_vel_xy: torch.Tensor | None = None
 
     def flatten(self) -> torch.Tensor:
         poses = torch.cat((self.positions, self.orientations), dim=-1).reshape(self.positions.shape[0], -1)
@@ -82,9 +92,9 @@ class SparsePoseCommandGenerator:
         self.num_segments = len(TRACKED_SEGMENTS)
 
         self.phase = torch.rand(self.num_envs, device=self.device) * (2.0 * torch.pi)
-        self.frame_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.frame_time_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.sequence_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        self.sequence_offsets = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.sequence_elapsed_s = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.command_done = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         self.dataset = None
@@ -96,9 +106,11 @@ class SparsePoseCommandGenerator:
             if self.dataset["sequence_starts"] is not None:
                 self.num_sequences = int(self.dataset["sequence_starts"].shape[0])
                 self.sequence_ids = torch.randint(0, self.num_sequences, (self.num_envs,), device=self.device)
-                self.sequence_offsets.zero_()
+                self.sequence_elapsed_s.zero_()
             else:
-                self.frame_idx = torch.randint(0, self.max_frame, (self.num_envs,), device=self.device)
+                frame_fps = float(self.dataset["sequence_fps"][0].item())
+                random_frames = torch.randint(0, self.max_frame, (self.num_envs,), device=self.device)
+                self.frame_time_s = random_frames.float() / frame_fps
 
     def _load_dataset(self, dataset_path: str, expected_embodiment: str | None = None) -> dict[str, torch.Tensor | None]:
         path = Path(dataset_path)
@@ -106,7 +118,7 @@ class SparsePoseCommandGenerator:
             raise FileNotFoundError(f"Dataset file does not exist: {path}")
 
         data = np.load(path)
-        dataset_embodiment = str(data["embodiment"]).strip().lower() if "embodiment" in data else None
+        dataset_embodiment = _read_npz_scalar_string(data, "embodiment")
         if expected_embodiment is not None and dataset_embodiment is not None:
             expected_key = expected_embodiment.strip().lower()
             if dataset_embodiment != expected_key:
@@ -114,11 +126,7 @@ class SparsePoseCommandGenerator:
                     f"Dataset embodiment mismatch for {path}: expected {expected_key!r}, found {dataset_embodiment!r}."
                 )
         elif expected_embodiment is not None and dataset_embodiment is None:
-            print(
-                f"WARNING: sparse dataset {path} does not declare an embodiment; "
-                f"expected {expected_embodiment!r}.",
-                flush=True,
-            )
+            raise ValueError(f"Sparse dataset {path} does not declare an embodiment; expected {expected_embodiment!r}.")
         raw_positions = torch.as_tensor(data["positions"], dtype=torch.float32, device=self.device)
         raw_orientations = torch.as_tensor(data["orientations"], dtype=torch.float32, device=self.device)
         if raw_positions.ndim != 3 or raw_positions.shape[1:] != (self.num_segments, 3):
@@ -131,6 +139,14 @@ class SparsePoseCommandGenerator:
             )
 
         position_valid = torch.as_tensor(data["position_valid"], dtype=torch.bool, device=self.device)
+        if "target_lin_vel_xy" not in data:
+            raise ValueError("Dataset mode requires target_lin_vel_xy root-trajectory commands.")
+        root_lin_vel_xy_w = torch.as_tensor(data["target_lin_vel_xy"], dtype=torch.float32, device=self.device)
+        if root_lin_vel_xy_w.shape != (raw_positions.shape[0], 2):
+            raise ValueError(
+                f"Expected target_lin_vel_xy with shape {(raw_positions.shape[0], 2)}, "
+                f"got {tuple(root_lin_vel_xy_w.shape)}"
+            )
         if "rotation_valid" not in data:
             raise ValueError(
                 "Dataset mode requires rotation_valid so pelvis-origin positions can be normalized into the pelvis frame."
@@ -180,6 +196,7 @@ class SparsePoseCommandGenerator:
             if has_sequence_lengths
             else None
         )
+        sequence_fps = self._resolve_sequence_fps(data, sequence_lengths, path)
         if sequence_starts is not None and sequence_lengths is not None:
             if sequence_starts.ndim != 1 or sequence_lengths.ndim != 1 or sequence_starts.shape != sequence_lengths.shape:
                 raise ValueError("sequence_starts and sequence_lengths must be matching 1-D arrays.")
@@ -187,15 +204,18 @@ class SparsePoseCommandGenerator:
                 raise ValueError("sequence_lengths must be strictly positive.")
             if torch.any(sequence_starts < 0) or torch.any(sequence_starts + sequence_lengths > raw_positions.shape[0]):
                 raise ValueError("sequence_starts/sequence_lengths contain ranges outside the sparse dataset.")
-            for seq_start, seq_len in zip(sequence_starts.tolist(), sequence_lengths.tolist(), strict=False):
+            for seq_start, seq_len, seq_fps in zip(
+                sequence_starts.tolist(), sequence_lengths.tolist(), sequence_fps.tolist(), strict=False
+            ):
                 seq_start = int(seq_start)
                 seq_len = int(seq_len)
                 if seq_len <= 1:
                     continue
+                seq_dt = 1.0 / float(seq_fps)
                 delta = positions[seq_start + 1 : seq_start + seq_len] - positions[seq_start : seq_start + seq_len - 1]
                 segment_velocities[seq_start + 1 : seq_start + seq_len] = quat_apply(
                     pelvis_quat_inv[seq_start + 1 : seq_start + seq_len],
-                    delta / self.dt,
+                    delta / seq_dt,
                 )
                 velocity_valid[seq_start + 1 : seq_start + seq_len] = (
                     position_valid[seq_start + 1 : seq_start + seq_len]
@@ -204,10 +224,14 @@ class SparsePoseCommandGenerator:
                 )
         else:
             if positions.shape[0] > 1:
+                seq_dt = 1.0 / float(sequence_fps[0].item())
                 delta = positions[1:] - positions[:-1]
-                segment_velocities[1:] = quat_apply(pelvis_quat_inv[1:], delta / self.dt)
+                segment_velocities[1:] = quat_apply(pelvis_quat_inv[1:], delta / seq_dt)
                 velocity_valid[1:] = position_valid[1:] & position_valid[:-1] & pelvis_rotation_valid[1:].unsqueeze(-1)
 
+        root_lin_vel_w = torch.zeros((raw_positions.shape[0], 3), dtype=torch.float32, device=self.device)
+        root_lin_vel_w[:, :2] = torch.nan_to_num(root_lin_vel_xy_w, nan=0.0, posinf=0.0, neginf=0.0)
+        root_lin_vel_local = quat_apply(pelvis_quat_inv[:, 0], root_lin_vel_w)[:, :2]
         positions = quat_apply(pelvis_quat_inv, positions)
         positions[:, pelvis_idx] = 0.0
         position_valid = position_valid & pelvis_rotation_valid.unsqueeze(-1)
@@ -224,9 +248,38 @@ class SparsePoseCommandGenerator:
             "rotation_valid": rotation_valid,
             "segment_velocities": segment_velocities,
             "velocity_valid": velocity_valid,
+            "root_lin_vel_xy": root_lin_vel_local,
             "sequence_starts": sequence_starts,
             "sequence_lengths": sequence_lengths,
+            "sequence_fps": sequence_fps,
         }
+
+    def _resolve_sequence_fps(
+        self,
+        data: np.lib.npyio.NpzFile,
+        sequence_lengths: torch.Tensor | None,
+        path: Path,
+    ) -> torch.Tensor:
+        sequence_count = 1 if sequence_lengths is None else int(sequence_lengths.shape[0])
+        if "sequence_fps" in data:
+            fps_np = np.asarray(data["sequence_fps"], dtype=np.float32)
+        elif "effective_fps" in data:
+            fps_np = np.asarray(data["effective_fps"], dtype=np.float32)
+        else:
+            raise ValueError(f"Sparse dataset {path} is missing required FPS metadata: sequence_fps or effective_fps.")
+
+        if fps_np.shape == ():
+            fps = np.full(sequence_count, float(fps_np), dtype=np.float32)
+        elif fps_np.ndim == 1 and len(fps_np) == sequence_count:
+            fps = fps_np.astype(np.float32)
+        else:
+            raise ValueError(
+                f"Sparse dataset {path} FPS metadata must be scalar or length {sequence_count}, "
+                f"got shape {fps_np.shape}."
+            )
+        if not np.isfinite(fps).all() or np.any(fps <= 0.0):
+            raise ValueError(f"Sparse dataset {path} contains invalid FPS metadata.")
+        return torch.as_tensor(fps, dtype=torch.float32, device=self.device)
 
     def reset(self, env_ids: torch.Tensor) -> None:
         if env_ids.numel() == 0:
@@ -237,9 +290,11 @@ class SparsePoseCommandGenerator:
         if self.dataset is not None:
             if self.dataset["sequence_starts"] is not None:
                 self.sequence_ids[env_ids] = torch.randint(0, self.num_sequences, (len(env_ids),), device=self.device)
-                self.sequence_offsets[env_ids] = 0
+                self.sequence_elapsed_s[env_ids] = 0.0
             else:
-                self.frame_idx[env_ids] = torch.randint(0, self.max_frame, (len(env_ids),), device=self.device)
+                frame_fps = float(self.dataset["sequence_fps"][0].item())
+                random_frames = torch.randint(0, self.max_frame, (len(env_ids),), device=self.device)
+                self.frame_time_s[env_ids] = random_frames.float() / frame_fps
 
     def step(self) -> SparsePoseBatch:
         if self.dataset is not None:
@@ -260,25 +315,57 @@ class SparsePoseCommandGenerator:
         if self.dataset["sequence_starts"] is not None:
             seq_starts = self.dataset["sequence_starts"][self.sequence_ids]
             seq_lengths = self.dataset["sequence_lengths"][self.sequence_ids]
-            safe_offsets = torch.minimum(self.sequence_offsets, seq_lengths - 1)
-            idx = seq_starts + safe_offsets
-            phase = (2.0 * torch.pi) * safe_offsets.float() / torch.clamp(seq_lengths.float() - 1.0, min=1.0)
+            seq_fps = self.dataset["sequence_fps"][self.sequence_ids]
+            frame_pos = torch.clamp(self.sequence_elapsed_s * seq_fps, min=0.0)
+            offset0 = torch.minimum(torch.floor(frame_pos).to(dtype=torch.long), seq_lengths - 1)
+            offset1 = torch.minimum(offset0 + 1, seq_lengths - 1)
+            alpha = torch.clamp(frame_pos - offset0.float(), 0.0, 1.0)
+            idx0 = seq_starts + offset0
+            idx1 = seq_starts + offset1
+            sequence_duration = torch.clamp(seq_lengths.float() / seq_fps, min=self.dt)
+            phase = (2.0 * torch.pi) * torch.clamp(self.sequence_elapsed_s / sequence_duration, 0.0, 1.0)
         else:
-            idx = self.frame_idx
+            frame_fps = self.dataset["sequence_fps"][0]
+            frame_pos = torch.remainder(self.frame_time_s * frame_fps, float(self.max_frame))
+            idx0 = torch.floor(frame_pos).to(dtype=torch.long)
+            idx1 = torch.remainder(idx0 + 1, self.max_frame)
+            alpha = torch.clamp(frame_pos - idx0.float(), 0.0, 1.0)
             denom = max(self.max_frame - 1, 1)
-            phase = (2.0 * torch.pi) * self.frame_idx.float() / float(denom)
-        positions = self.dataset["positions"][idx]
-        orientations = self.dataset["orientations"][idx]
-        position_valid = self.dataset["position_valid"][idx]
-        rotation_valid = self.dataset["rotation_valid"][idx]
-        segment_velocities = self.dataset["segment_velocities"][idx]
-        velocity_valid = self.dataset["velocity_valid"][idx]
+            phase = (2.0 * torch.pi) * frame_pos / float(denom)
+        alpha_pos = alpha.view(-1, 1, 1)
+        alpha_mask = alpha.view(-1, 1) > 1.0e-6
+        positions0 = self.dataset["positions"][idx0]
+        positions1 = self.dataset["positions"][idx1]
+        positions = (1.0 - alpha_pos) * positions0 + alpha_pos * positions1
+        orientations0 = self.dataset["orientations"][idx0]
+        orientations1 = self.dataset["orientations"][idx1]
+        quat_sign = torch.where(torch.sum(orientations0 * orientations1, dim=-1, keepdim=True) < 0.0, -1.0, 1.0)
+        orientations = _normalize_quat((1.0 - alpha_pos) * orientations0 + alpha_pos * orientations1 * quat_sign)
+        position_valid0 = self.dataset["position_valid"][idx0]
+        position_valid1 = self.dataset["position_valid"][idx1]
+        rotation_valid0 = self.dataset["rotation_valid"][idx0]
+        rotation_valid1 = self.dataset["rotation_valid"][idx1]
+        velocity_valid0 = self.dataset["velocity_valid"][idx0]
+        velocity_valid1 = self.dataset["velocity_valid"][idx1]
+        position_valid = torch.where(alpha_mask, position_valid0 & position_valid1, position_valid0)
+        rotation_valid = torch.where(alpha_mask, rotation_valid0 & rotation_valid1, rotation_valid0)
+        velocity_valid = torch.where(alpha_mask, velocity_valid0 & velocity_valid1, velocity_valid0)
+        segment_velocities0 = self.dataset["segment_velocities"][idx0]
+        segment_velocities1 = self.dataset["segment_velocities"][idx1]
+        segment_velocities = (1.0 - alpha_pos) * segment_velocities0 + alpha_pos * segment_velocities1
+        alpha_root = alpha.view(-1, 1)
+        root_lin_vel_xy0 = self.dataset["root_lin_vel_xy"][idx0]
+        root_lin_vel_xy1 = self.dataset["root_lin_vel_xy"][idx1]
+        root_lin_vel_xy = (1.0 - alpha_root) * root_lin_vel_xy0 + alpha_root * root_lin_vel_xy1
         if advance and self.dataset["sequence_starts"] is not None:
-            next_offsets = self.sequence_offsets + 1
-            self.command_done.copy_(next_offsets >= seq_lengths)
-            self.sequence_offsets = torch.minimum(next_offsets, seq_lengths)
+            next_elapsed = self.sequence_elapsed_s + self.dt
+            self.command_done.copy_(next_elapsed * seq_fps >= seq_lengths.float())
+            sequence_stop_time = seq_lengths.float() / seq_fps
+            self.sequence_elapsed_s = torch.minimum(next_elapsed, sequence_stop_time)
         elif advance:
-            self.frame_idx = torch.remainder(self.frame_idx + 1, self.max_frame)
+            frame_fps = self.dataset["sequence_fps"][0]
+            sequence_duration = float(self.max_frame) / float(frame_fps.item())
+            self.frame_time_s = torch.remainder(self.frame_time_s + self.dt, sequence_duration)
         return SparsePoseBatch(
             positions,
             orientations,
@@ -287,6 +374,7 @@ class SparsePoseCommandGenerator:
             phase,
             segment_velocities=segment_velocities,
             velocity_valid=velocity_valid,
+            root_lin_vel_xy=root_lin_vel_xy,
         )
 
     def _synthetic_batch(self) -> SparsePoseBatch:
@@ -339,4 +427,5 @@ class SparsePoseCommandGenerator:
 
         rotation_valid[:, SEGMENT_INDEX["pelvis"]] = False
         position_valid[:, SEGMENT_INDEX["pelvis"]] = True
-        return SparsePoseBatch(positions, orientations, position_valid, rotation_valid, self.phase.clone())
+        root_lin_vel_xy = torch.zeros(batch, 2, dtype=torch.float32, device=self.device)
+        return SparsePoseBatch(positions, orientations, position_valid, rotation_valid, self.phase.clone(), root_lin_vel_xy=root_lin_vel_xy)

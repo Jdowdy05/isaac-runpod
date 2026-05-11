@@ -3,10 +3,11 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RAW_ROOT="${RAW_ROOT:-${PROJECT_ROOT}/data/raw}"
-OPEN_PROCESSED_ROOT="${OPEN_PROCESSED_ROOT:-${PROJECT_ROOT}/data/processed/open}"
 G1_PROCESSED_ROOT="${G1_PROCESSED_ROOT:-${PROJECT_ROOT}/data/processed/g1}"
 AIST_ROOT="${AIST_ROOT:-${RAW_ROOT}/aistplusplus}"
-OPEN_AMASS_DATASET_PATH="${OPEN_AMASS_DATASET_PATH:-${OPEN_PROCESSED_ROOT}/amass_sparse_pose.npz}"
+AMASS_ROOT="${AMASS_ROOT:-${RAW_ROOT}/AMASS_Complete}"
+SMPL_MODEL_ROOT="${SMPL_MODEL_ROOT:-${RAW_ROOT}/smplh}"
+AMASS_SUBSETS="${AMASS_SUBSETS:-ACCAD BMLmovi BMLrub CMU EKUT EyesJapanDataset HDM05 HumanEva KIT TotalCapture Transitions DanceDB}"
 G1_AIST_DATASET_PATH="${G1_AIST_DATASET_PATH:-${G1_PROCESSED_ROOT}/aist_sparse_pose.npz}"
 G1_AMASS_DATASET_PATH="${G1_AMASS_DATASET_PATH:-${G1_PROCESSED_ROOT}/amass_sparse_pose.npz}"
 G1_COMBINED_DATASET_PATH="${G1_COMBINED_DATASET_PATH:-${G1_PROCESSED_ROOT}/teleop_sparse_pose.npz}"
@@ -24,9 +25,13 @@ if [[ ! -d "${AIST_ROOT}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${OPEN_AMASS_DATASET_PATH}" ]]; then
-  echo "Expected OP3-scaled AMASS sparse dataset at: ${OPEN_AMASS_DATASET_PATH}" >&2
-  echo "Run scripts/runpod/prepare_amass_dataset.sh first." >&2
+if [[ ! -d "${AMASS_ROOT}" ]]; then
+  echo "AMASS root not found: ${AMASS_ROOT}" >&2
+  exit 1
+fi
+
+if [[ ! -d "${SMPL_MODEL_ROOT}" ]]; then
+  echo "SMPL-H model root not found: ${SMPL_MODEL_ROOT}" >&2
   exit 1
 fi
 
@@ -37,11 +42,14 @@ fi
 
 G1_MERGE_OUTPUT_PATH="${G1_COMBINED_DATASET_PATH%.npz}_unfiltered_merge.npz"
 
-"${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/rescale_sparse_dataset.py" \
-  --input "${OPEN_AMASS_DATASET_PATH}" \
+read -r -a AMASS_SUBSET_ARRAY <<< "${AMASS_SUBSETS}"
+"${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/prepare_amass_sparse.py" \
+  --amass-root "${AMASS_ROOT}" \
+  --smpl-model-root "${SMPL_MODEL_ROOT}" \
   --output "${G1_AMASS_DATASET_PATH}" \
-  --source-embodiment op3 \
-  --target-embodiment g1
+  --embodiment g1 \
+  --disable-feasibility-filter \
+  --subsets "${AMASS_SUBSET_ARRAY[@]}"
 
 "${PYTHON_CMD[@]}" "${PROJECT_ROOT}/scripts/data/merge_sparse_datasets.py" \
   --inputs "${G1_AIST_DATASET_PATH}" "${G1_AMASS_DATASET_PATH}" \

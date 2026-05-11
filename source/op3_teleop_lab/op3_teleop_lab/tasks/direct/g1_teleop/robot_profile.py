@@ -38,6 +38,8 @@ def make_default_g1_profile() -> SparseHumanoidRobotProfile:
         ),
         segment_to_body_name={
             "pelvis": "pelvis",
+            # G1 has no separately actuated head in this asset; G1 preprocessing writes
+            # the sparse "head" slot as an upper-torso/neck surrogate.
             "head": "torso_link",
             "left_hand": "left_hand_palm_link",
             "right_hand": "right_hand_palm_link",

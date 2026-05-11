@@ -41,3 +41,43 @@ The next data additions should be:
 
 Use the open bundle now to make the codepath real. Do not treat it as the final training corpus.
 
+## Canonical Processed Paths
+
+OP3 and G1 sparse datasets are embodiment-specific and should not be swapped.
+
+- OP3/open: `data/processed/open/aist_sparse_pose.npz`
+- OP3/open: `data/processed/open/amass_sparse_pose.npz`
+- OP3/open: `data/processed/open/teleop_sparse_pose.npz`
+- G1: `data/processed/g1/aist_sparse_pose.npz`
+- G1: `data/processed/g1/amass_sparse_pose.npz`
+- G1: `data/processed/g1/teleop_sparse_pose.npz`
+
+Before launching G1 training or playback, confirm the selected dataset path starts with `data/processed/g1/`.
+
+## Required Sparse NPZ Metadata
+
+Current sparse datasets must declare:
+
+- `embodiment`: scalar string such as `op3` or `g1`
+- `sequence_fps`: one FPS value per sequence, or scalar `effective_fps` for single-rate legacy-compatible files
+- `target_lin_vel_xy`: root XY velocity command before runtime conversion into the pelvis/root frame
+- `sequence_starts` and `sequence_lengths` for clip boundaries
+- `source_datasets` and `sequence_source_dataset` for provenance after merge/filter
+
+Merging now rejects mixed embodiments, and runtime loading rejects datasets that do not declare the expected embodiment. Older NPZs that lack these fields should be regenerated.
+
+For G1, AIST and AMASS are now preprocessed directly with the G1 embodiment profile. The sparse slot named `head` is generated as an upper-torso/neck surrogate for G1 because the current G1 asset tracks that slot with `torso_link`.
+
+RunPod rebuild note from 2026-05-09: the current final G1 training file at `/workspace/isaac-runpod/data/processed/g1/teleop_sparse_pose.npz` is direct-G1 AMASS-derived (`8,253` clips, `1,885,671` frames). AIST was regenerated but rejected by the current G1 feasibility filter, so do not assume the final file contains AIST clips just because the preparation script builds AIST first.
+
+## Local Raw Data Staging
+
+Local raw data is gitignored under `data/raw/`. As of 2026-05-11:
+
+- `data/raw/archive/amass_smplh_g/` contains one canonical local copy of the AMASS SMPL+H G subset archives from `/Users/jordan/Downloads/smplh`.
+- `/Users/jordan/Downloads/smplh_2` was checked and matched the same archive set byte-for-byte, so it is treated as a duplicate.
+- `data/raw/archive/smplh_models/` contains the actual SMPL-H model PKLs copied from `/Users/jordan/Downloads/smplx/smplh`.
+- `data/raw/smplh/` contains a script-ready local copy of `SMPLH_MALE.pkl` and `SMPLH_FEMALE.pkl`.
+- Local AIST++ was not found; the active RunPod still has `data/raw/aistplusplus`.
+
+Despite the folder names, `/Users/jordan/Downloads/smplh` and `/Users/jordan/Downloads/smplh_2` are AMASS archive folders, not SMPL-H model folders. The actual model files used by `prepare_amass_sparse.py` came from `/Users/jordan/Downloads/smplx/smplh`.
